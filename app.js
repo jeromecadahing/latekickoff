@@ -1530,6 +1530,66 @@
     }
   })();
 
+  // ---------- share the app with a QR code ----------
+  (function shareApp() {
+    const dialog = document.getElementById('share-dialog');
+    const openBtn = document.getElementById('share-open');
+    if (!dialog || !openBtn) return;
+    // The app's public address, without "index.html" on the end.
+    const appUrl = new URL('./', location.href).href;
+
+    function drawQR() {
+      const box = document.getElementById('share-qr');
+      if (box.firstChild || typeof window.qrcode !== 'function') return;
+      const qr = window.qrcode(0, 'M');
+      qr.addData(appUrl);
+      qr.make();
+      const n = qr.getModuleCount();
+      const quiet = 4;
+      const size = n + quiet * 2;
+      let path = '';
+      for (let r = 0; r < n; r++) {
+        for (let c = 0; c < n; c++) {
+          if (qr.isDark(r, c)) path += `M${c + quiet} ${r + quiet}h1v1h-1z`;
+        }
+      }
+      box.innerHTML = `<svg viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg">
+        <rect width="${size}" height="${size}" fill="#fff"/><path d="${path}" fill="#000"/></svg>`;
+    }
+
+    document.getElementById('share-url').textContent = appUrl.replace(/^https?:\/\//, '');
+    openBtn.addEventListener('click', () => {
+      drawQR();
+      if (typeof dialog.showModal === 'function') dialog.showModal(); else dialog.setAttribute('open', '');
+    });
+    const close = () => (typeof dialog.close === 'function' ? dialog.close() : dialog.removeAttribute('open'));
+    document.getElementById('share-close').addEventListener('click', close);
+    dialog.addEventListener('click', e => { if (e.target === dialog) close(); });
+
+    const copyBtn = document.getElementById('share-copy');
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(appUrl);
+        copyBtn.textContent = 'Link copied';
+      } catch {
+        copyBtn.textContent = 'Press and hold the link to copy';
+      }
+      setTimeout(() => { copyBtn.textContent = 'Copy link'; }, 2500);
+    });
+
+    const nativeBtn = document.getElementById('share-native');
+    if (navigator.share) {
+      nativeBtn.hidden = false;
+      nativeBtn.addEventListener('click', () => {
+        navigator.share({
+          title: 'Late Kick-off',
+          text: 'NFL and NBA in UK time, with UK channels, odds and standings.',
+          url: appUrl
+        }).catch(() => {});
+      });
+    }
+  })();
+
   // ---------- keep odds fresh ----------
   // Bookmakers release and move lines all week, so re-check every 10 minutes
   // while the app is open, and straight away when it's reopened.
