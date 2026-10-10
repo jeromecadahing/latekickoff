@@ -266,6 +266,7 @@
     if (!r) {
       r = hist[key] = {
         id: g.id, league: g.league, t: g.date.getTime(), yr: g.seasonYear, st: g.seasonType,
+        nt: g.neutral ? 1 : 0,
         h: { id: String(g.home.id), a: g.home.abbr, n: g.home.short },
         a: { id: String(g.away.id), a: g.away.abbr, n: g.away.short }
       };
@@ -429,6 +430,123 @@
     return backfilling;
   }
 
+  // ---------- our estimate: saving and grading ----------
+  function saveEstimate(key, est, live) {
+    const r = hist[key];
+    if (!r || (r.est?.live && !live)) return;          // never replace a pre-game estimate with a worked-out one
+    if (r.hs != null && live && !r.est) return;          // too late to count as a pre-game estimate
+    r.est = {
+      h: +est.pHome.toFixed(4),
+      c: est.pHomeCover != null ? +est.pHomeCover.toFixed(4) : null,
+      ov: est.pOver != null ? +est.pOver.toFixed(4) : null,
+      live: live ? 1 : 0
+    };
+    persistHistory();
+  }
+
+  // Did our estimate get it right? Compares our picks with the final score.
+  function gradeEstimate(r, g) {
+    if (!r.est || r.hs == null) return null;
+    const winner = r.hs > r.as ? 'h' : r.hs < r.as ? 'a' : null;
+    const pick = r.est.h >= 0.5 ? 'h' : 'a';
+    const out = {
+      pick,
+      conf: Math.max(r.est.h, 1 - r.est.h),
+      won: winner == null ? null : pick === winner,
+      agreed: g ? pick === g.fav : null,
+      live: !!r.est.live
+    };
+    if (r.est.c != null && g?.line != null) {
+      const homeLine = g.fav === 'h' ? -g.line : g.line;
+      const res = (r.hs - r.as) + homeLine;
+      const coverPick = r.est.c >= 0.5 ? 'h' : 'a';
+      out.cover = res === 0 ? null : (res > 0 ? 'h' : 'a') === coverPick;
+    }
+    if (r.est.ov != null && g?.total && g.total !== 'push') {
+      out.totalPick = r.est.ov >= 0.5 ? 'over' : 'under';
+      out.total = out.totalPick === g.total;
+    }
+    return out;
+  }
+
+  // For finished games with odds but no saved estimate, work one out using
+  // only results from before that game, so it's a fair test.
+  let backtesting = null;
+  function backtestEstimates(onProgress = () => {}) {
+    if (backtesting) return backtesting;
+    backtesting = (async () => {
+      const todo = Object.values(hist).filter(r => r.o && r.hs != null && !r.est && r.yr);
+      if (!todo.length) return;
+      onProgress(`Working out our estimate for ${todo.length} past ${todo.length === 1 ? 'game' : 'games'}…`);
+      const histFor = new Map();
+      const getHist = (league, id, yr) => {
+        const k = `${league}-${id}-${yr}`;
+        if (!histFor.has(k)) histFor.set(k, teamHistory(league, id, yr, 2));
+        return histFor.get(k);
+      };
+      for (const r of todo) {
+        try {
+          const [hh, ah] = await Promise.all([getHist(r.league, r.h.id, r.yr), getHist(r.league, r.a.id, r.yr)]);
+          const before = h => h.filter(x => x.date.getTime() < r.t && x.id !== r.id);
+          const pseudo = {
+            league: r.league, neutral: !!r.nt,
+            home: { abbr: r.h.a, id: r.h.id }, away: { abbr: r.a.a, id: r.a.id },
+            odds: { details: r.o.d, overUnder: r.o.ou, home: r.o.h, away: r.o.a }
+          };
+          const est = estimate(pseudo, before(ah), before(hh));
+          if (est) saveEstimate(`${r.league}-${r.id}`, est, false);
+        } catch { /* skip this game */ }
+      }
+    })().finally(() => { backtesting = null; });
+    return backtesting;
+  }
+
+  function ourEstimateHTML(games) {
+    const rows = games.map(x => ({ ...x, e: gradeEstimate(x.r, x.g) })).filter(x => x.e);
+    if (!rows.length) {
+      return `<section class="our">
+        <h2 class="day-head">How our estimate did</h2>
+        <p class="intro">No finished games with an estimate yet. Estimates are saved when you open a game on the Games today tab, and worked out for past games once their results are in.</p>
+      </section>`;
+    }
+    const decided = rows.filter(x => x.e.won != null);
+    const right = decided.filter(x => x.e.won).length;
+    const favDecided = decided.filter(x => x.g.favWon != null);
+    const favRight = favDecided.filter(x => x.g.favWon).length;
+    const disagree = decided.filter(x => x.e.agreed === false);
+    const disRight = disagree.filter(x => x.e.won).length;
+    const confident = decided.filter(x => x.e.conf >= 0.65);
+    const confRight = confident.filter(x => x.e.won).length;
+    const cov = rows.filter(x => x.e.cover != null);
+    const covRight = cov.filter(x => x.e.cover).length;
+    const tot = rows.filter(x => x.e.total != null);
+    const totRight = tot.filter(x => x.e.total).length;
+    const live = rows.filter(x => x.e.live).length;
+
+    const stat = (label, tip, n, d) => d ? `<div>
+        <dt>${tipBtn(esc(label), tip)}</dt>
+        <dd>${pct(n, d)}% <small>${n} of ${d}</small></dd></div>` : '';
+
+    return `<section class="our">
+      <h2 class="day-head">How our estimate did</h2>
+      <div class="hit-rate">
+        <div class="hit-main">
+          <span class="hit-num">${pct(right, decided.length)}%</span>
+          <span class="hit-lbl">${tipBtn(`winners picked by our estimate (${right} of ${decided.length} games)`,
+            'Our pick is the team our estimate gave more than a 50% chance. This is how often that team won.')}</span>
+        </div>
+        <dl class="hit-side">
+          ${stat('Bookmakers’ favourite, same games', 'How often the bookmakers’ favourite won in the same games, so you can compare.', favRight, favDecided.length)}
+          ${stat('When we disagreed with the bookmakers', 'Games where our estimate picked the team the bookmakers made the underdog. This is how often our pick won.', disRight, disagree.length)}
+          ${stat('Confident picks (65%+)', 'Games where our estimate gave one team at least a 65% chance.', confRight, confident.length)}
+          ${stat('Handicap picks', 'How often the side our estimate expected to land the handicap actually did. Pushes are left out.', covRight, cov.length)}
+          ${stat('Over/under picks', 'How often our over or under pick on the total points was right. Pushes are left out.', totRight, tot.length)}
+        </dl>
+      </div>
+      <p class="hint left">${live} of ${rows.length} estimates were saved before kick-off. The rest were worked out afterwards using only results from before each game.</p>
+    </section>`;
+  }
+
   // ---------- odds record tab ----------
   const oddsEl = document.getElementById('odds-record');
   const pct = (n, d) => (d ? Math.round((n / d) * 100) : 0);
@@ -496,15 +614,18 @@
         g.cover ? `Spread ${g.cover === 'yes' ? 'covered' : g.cover === 'no' ? 'not covered' : 'push'}` : '',
         g.total ? `${g.total === 'push' ? 'Total push' : g.total === 'over' ? 'Over' : 'Under'} ${r.o.ou}` : ''
       ].filter(Boolean).join(', ');
+      const e = gradeEstimate(r, g);
+      const ourPick = e ? `<small class="ourpick ${e.won == null ? '' : e.won ? 'ok' : 'no'}">Our pick: ${esc((e.pick === 'h' ? r.h : r.a).n)} ${Math.round(e.conf * 100)}%${e.won == null ? '' : e.won ? ' ✓' : ' ✗'}</small>` : '';
       return `<li class="${outcome[0]}">
         <span class="odate">${esc(date)}<span class="league-tag ${r.league}">${LEAGUES[r.league].label}</span></span>
         <span class="ogame">${esc(r.a.n)} ${r.as} <span class="muted-i">at</span> ${esc(r.h.n)} ${r.hs}</span>
-        <span class="ofav">Favourite: ${esc(favT.n)}${price ? ` <span class="frac">${price.decimal}</span>` : ''}${extras ? `<small>${esc(extras)}</small>` : ''}</span>
+        <span class="ofav">Favourite: ${esc(favT.n)}${price ? ` <span class="frac">${price.decimal}</span>` : ''}${extras ? `<small>${esc(extras)}</small>` : ''}${ourPick}</span>
         <span class="oresult">${outcome[1]}</span>
       </li>`;
     }).join('');
 
     oddsEl.innerHTML = `${progressHTML}${headline}
+      ${ourEstimateHTML(games)}
       ${bandRows ? `<h2 class="day-head">How accurate were the odds?</h2>
         <p class="intro">If the odds are well judged, teams given a 70% chance should win about 70% of the time.</p>
         <div class="bands">${bandRows}</div>` : ''}
@@ -522,6 +643,7 @@
       last = Date.now();
       renderOddsRecord(msg);
     });
+    await backtestEstimates(msg => { if (state.tab === 'odds') renderOddsRecord(msg); });
     if (state.tab === 'odds') renderOddsRecord();
   }
 
@@ -724,6 +846,110 @@
       margin: (sum('us') - sum('them')) / last.length
     };
   }
+
+  // ---------- descriptions (hover on a computer, tap on a phone) ----------
+  const TIPS = {
+    main: {
+      'Win chance from the odds': 'The bookmakers’ prices turned into a percentage chance for each team, with their built-in margin taken out so the two add up to 100%.',
+      'To win': 'The price for each team to win the game. The first number is the decimal price (your total return per £1 staked, including the stake). The second is the UK fractional price.'
+    },
+    more: {
+      'Handicap (spread)': 'The favourite gets a minus number and must win by more than that many points for the handicap to land. The underdog gets a plus number and lands it by losing by less than that, or by winning. The “at” price is what each side pays.',
+      'Total points': 'The bookmakers’ line for both teams’ scores added together. “Over” lands if the final combined score is higher than the line, “under” if it’s lower.',
+      'Opening win price': 'The first win price this app saw for each team. ▼ means the price has shortened since (bookmakers now rate the team’s chances higher). ▲ means it has drifted (rated lower).',
+      'Prices by bookmaker': 'Win prices, handicap and total from each bookmaker ESPN lists. The highlighted price is the highest available for each team.'
+    },
+    est: {
+      'Win chance, our estimate': 'Worked out from each team’s last 10 results. It blends each team’s average points scored with the other team’s average points allowed, adds a small home advantage, then turns the expected margin into a chance of winning.',
+      'Win chance, bookmakers': 'The bookmakers’ win prices turned into a percentage, with their margin taken out.',
+      'Win chance, ESPN': 'ESPN’s own prediction from its team-strength model (FPI for the NFL, BPI for the NBA). It also takes schedule strength into account.',
+      'Fair price from our estimate': 'The decimal price that matches our estimate (1 ÷ chance). If the bookmakers’ price is higher, they rate the team’s chances lower than our estimate does. If it’s lower, they rate them higher.',
+      'Expected points': 'How many points each team is expected to score, from its recent average scored blended with the opponent’s recent average allowed.',
+      'Chance to cover': 'Our estimate of how likely each side is to land the bookmakers’ handicap, based on the expected winning margin.',
+      'Total points': 'Our estimate of how likely the combined score is to go over or under the bookmakers’ total, based on both teams’ expected points.',
+      'From your Odds record': 'How often favourites with a similar win chance (within 5%) have actually won, from the finished games saved in your Odds record tab.'
+    },
+    form: {
+      'Season record': 'Wins and losses (and ties in the NFL) so far this season.',
+      'Away / home record': 'The away team’s record on the road and the home team’s record at home this season.',
+      'Last 5 games': 'Most recent result first. W is a win, L a loss, T a tie. Hover over or tap a result to see the score.',
+      'Points scored per game': 'Average points scored over the last 5 games.',
+      'Points allowed per game': 'Average points conceded over the last 5 games.',
+      'Average margin': 'Average points scored minus points allowed over the last 5 games. Positive means they’ve been winning by that much on average.',
+      'Record against the spread': 'How often the team has landed the bookmakers’ handicap this season (wins–losses–pushes), from ESPN.',
+      'Record as favourite': 'Wins and losses this season in games where the bookmakers made this team the favourite, from your saved odds history.',
+      'Record as underdog': 'Wins and losses this season in games where this team was the underdog, from your saved odds history.'
+    },
+    h2h: {
+      'Wins, last': 'Regular-season wins for each team when they’ve played each other.',
+      'Average points': 'Average points each team scored in those meetings.'
+    }
+  };
+
+  function addTips(root) {
+    root.querySelectorAll('.lbl').forEach(el => {
+      if (el.querySelector('.tip') || el.closest('.meetings')) return;
+      const sect = el.closest('[data-sect]')?.dataset.sect || 'main';
+      const text = el.textContent.trim();
+      const table = { ...TIPS.main, ...(TIPS[sect] || {}) };
+      const key = Object.keys(table).find(k => text.startsWith(k));
+      if (!key) return;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tip';
+      btn.dataset.tip = table[key];
+      while (el.firstChild) btn.appendChild(el.firstChild);
+      el.appendChild(btn);
+    });
+  }
+  const tipBtn = (text, tip) => `<button type="button" class="tip" data-tip="${esc(tip)}">${text}</button>`;
+
+  const tipEl = document.createElement('div');
+  tipEl.className = 'tooltip';
+  tipEl.id = 'tooltip';
+  tipEl.setAttribute('role', 'tooltip');
+  tipEl.hidden = true;
+  document.body.appendChild(tipEl);
+  let tipFor = null;
+
+  function showTip(btn) {
+    if (tipFor && tipFor !== btn) tipFor.removeAttribute('aria-describedby');
+    tipFor = btn;
+    tipEl.textContent = btn.dataset.tip;
+    tipEl.hidden = false;
+    btn.setAttribute('aria-describedby', 'tooltip');
+    const r = btn.getBoundingClientRect();
+    const w = tipEl.offsetWidth, h = tipEl.offsetHeight;
+    let left = r.left + r.width / 2 - w / 2;
+    left = Math.max(8, Math.min(left, document.documentElement.clientWidth - w - 8));
+    let top = r.bottom + 8;
+    if (top + h > window.innerHeight - 8) top = r.top - h - 8;
+    tipEl.style.left = `${left + window.scrollX}px`;
+    tipEl.style.top = `${top + window.scrollY}px`;
+  }
+  function hideTip() {
+    tipEl.hidden = true;
+    tipFor?.removeAttribute('aria-describedby');
+    tipFor = null;
+  }
+  const canHover = () => window.matchMedia?.('(hover: hover)').matches;
+  document.addEventListener('mouseover', e => {
+    const b = e.target.closest?.('.tip');
+    if (b && canHover()) showTip(b);
+  });
+  document.addEventListener('mouseout', e => {
+    const b = e.target.closest?.('.tip');
+    if (b && canHover() && !b.contains(e.relatedTarget)) hideTip();
+  });
+  document.addEventListener('click', e => {
+    const b = e.target.closest?.('.tip');
+    if (!b) { if (!e.target.closest?.('.tooltip')) hideTip(); return; }
+    if (tipFor === b && !tipEl.hidden && !canHover()) hideTip(); else showTip(b);
+  });
+  document.addEventListener('focusin', e => { const b = e.target.closest?.('.tip'); if (b) showTip(b); });
+  document.addEventListener('focusout', e => { if (e.target.closest?.('.tip')) hideTip(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') hideTip(); });
+  window.addEventListener('scroll', () => { if (!tipEl.hidden) hideTip(); }, { passive: true });
 
   // ---------- games today: odds markets ----------
   const todayEl = document.getElementById('today');
@@ -997,7 +1223,7 @@
 
   function fill(card, key, html) {
     const body = card.querySelector(`[data-sect="${key}"] .sect-body`);
-    if (body) body.innerHTML = `<div class="compare">${html}</div>`;
+    if (body) { body.innerHTML = `<div class="compare">${html}</div>`; addTips(body); }
   }
 
   async function loadMatchDetail(card, g) {
@@ -1018,6 +1244,7 @@
       g.odds = books[0];
       noteGame(g, g.odds);
       card.querySelector('.odds-slot').innerHTML = oddsMainHTML(g);
+      addTips(card.querySelector('.odds-slot'));
     }
     // Fill in prices the scoreboard didn't include from the matching bookmaker.
     if (g.odds && books.length) {
@@ -1045,6 +1272,7 @@
     const notThis = h => h.filter(x => x.id !== g.id);
     const [awayHist, homeHist] = hist.map(notThis);
     const est = estimate(g, awayHist, homeHist);
+    if (est && g.state === 'pre') saveEstimate(`${g.league}-${g.id}`, est, true);
     fill(card, 'est', estimateHTML(g, est, predictor));
     fill(card, 'form', formHTML(g, awayHist, homeHist, ats));
     fill(card, 'h2h', h2hHTML(g, awayHist));
@@ -1086,6 +1314,7 @@
         <span class="count">${list.length} ${list.length === 1 ? 'game' : 'games'}</span></h2>
       <div class="matches">${list.map(matchCardHTML).join('')}</div>`;
 
+    addTips(todayEl);
     // Load form and head-to-head as each card scrolls into view.
     observer?.disconnect();
     const byKey = new Map(list.map(g => [`${g.league}-${g.id}`, g]));

@@ -22,6 +22,8 @@ The **Games today** tab shows today's games (or the next day with games, if ther
 - **Form and stats**: season and home/away records, last 5 results, points scored and allowed, record against the spread, and record as favourite and underdog.
 - **Head-to-head**: wins for each side over recent regular seasons (5 for NFL, 3 for NBA), average points, and the last few meetings.
 
+Every odds, estimate and stats item has a short description. Hover over the dotted-underlined label on a computer, or tap it on a phone.
+
 Details load as each card scrolls into view, so the page stays quick on busy NBA nights. On phones, text and spacing are tighter so more fits on screen.
 
 **Upcoming odds** appear on every game in the Schedule tab as soon as bookmakers release them ("Odds not out yet" until then). Each team's decimal price is shown with the spread and points total. Once the price changes, you'll see where it opened, with ▼ when a price has shortened and ▲ when it has drifted. A "New odds" badge marks lines released in the last 12 hours, and "Odds moved" marks lines that changed in the last 24 hours. The Games today cards also show each team's opening price. The app re-checks odds every 10 minutes while it's open, and again whenever you reopen it.
@@ -30,7 +32,10 @@ The **Odds record** tab tracks how often the odds got it right:
 
 - how often the favourite won, how often it covered the spread, and how often games went over the points total
 - an accuracy check by favourite strength (heavy, clear and slight favourites), comparing the win chance the odds gave with how often those teams actually won
-- the last 40 finished games, marked as "Favourite won" or "Upset"
+- **How our estimate did**: how often the team our estimate favoured actually won, compared with the bookmakers' favourite in the same games, plus how our picks did when we disagreed with the bookmakers, on confident picks (65%+), on the handicap and on over/under
+- the last 40 finished games, marked as "Favourite won" or "Upset", with our estimate's pick and whether it was right
+
+Our estimate is saved before kick-off whenever you open a game on the Games today tab. For other finished games, the app works it out afterwards using only results from before that game, so it's still a fair test. The tab shows how many of each there are.
 
 It saves the odds for every game the app sees, keeping the last odds before kick-off, then adds the result. It also fills in past games from ESPN (finished NFL weeks this season and the last 3 weeks of NBA). History is stored on your device, so each phone or browser builds its own. Match cards on the Games today tab also show each team's record as favourite and as underdog this season.
 
