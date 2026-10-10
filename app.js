@@ -1000,7 +1000,14 @@
 
   // ---------- games today: odds markets ----------
   const todayEl = document.getElementById('today');
-  let observer = null;
+  const openMatches = new Set();
+  (function addToggleAll() {
+    const bar = document.querySelector('#panel-today .toolbar');
+    if (!bar || document.getElementById('today-toggle-all')) return;
+    const b = document.createElement('button');
+    b.type = 'button'; b.id = 'today-toggle-all'; b.className = 'btn btn-ghost btn-small'; b.textContent = 'Open all';
+    bar.appendChild(b);
+  })();
 
   const price = ml => {
     const x = americanTo(ml);
@@ -1526,41 +1533,71 @@
     </details>`;
   }
 
+  // Compact one-glance row for each game; the full card opens underneath.
+  function matchRowHTML(g) {
+    const o = g.odds;
+    const a = americanTo(o?.away), h = americanTo(o?.home);
+    const live = g.state !== 'pre';
+    let ap = null, hp = null;
+    if (a && h) { ap = Math.round((a.implied / (a.implied + h.implied)) * 100); hp = 100 - ap; }
+    const n = oddsNews(g);
+    const side = (t, pr, pct) => `<span class="mr-team">
+        ${logoHTML(t, 22)}<span class="mr-name">${esc(t.short)}</span>
+        ${live ? `<span class="mr-score${t.winner ? ' win' : ''}">${esc(t.score ?? '')}</span>`
+               : `<span class="mr-price">${pr ? pr.decimal : '–'}</span><span class="mr-pct">${pct != null ? `${pct}%` : ''}</span>`}
+      </span>`;
+    const mine = g.channels.filter(c => state.mine.includes(c.id));
+    const tv = g.channels.find(c => c.kind === 'tv');
+    const chan = mine[0] || tv || g.channels[0];
+    return `<span class="mr-time">${esc(g.uk.time)}${g.uk.hour < 7 ? '<small>overnight</small>' : ''}</span>
+      <span class="mr-teams">${side(g.away, a, ap)}${side(g.home, h, hp)}</span>
+      <span class="mr-meta">
+        <span class="league-tag ${g.league}">${LEAGUES[g.league].label}</span>
+        ${live ? statusHTML(g) : ''}
+        ${!live && !o ? '<span class="muted-i">Odds not out yet</span>' : ''}
+        ${newsBadge(n)}
+        ${chan ? `<span class="mr-chan${mine.length ? ' mine' : ''}">${mine.length ? '✓ ' : ''}${esc(chan.name)}${g.channels.length > 1 ? ` +${g.channels.length - 1}` : ''}</span>` : ''}
+      </span>
+      <span class="mr-caret" aria-hidden="true">›</span>`;
+  }
+
   function matchCardHTML(g) {
     const open = openByDefault();
-    return `<article class="match ${g.league}" data-key="${g.league}-${g.id}" title="Game ID ${esc(g.id)}">
-      <header class="match-top">
-        <div class="when"><span class="time">${esc(g.uk.time)}</span>${g.uk.hour < 7 ? '<span class="night">overnight</span>' : ''}</div>
-        <div class="match-meta">
-          <span class="league-tag ${g.league}">${LEAGUES[g.league].label}</span>
-          ${statusHTML(g)}
-          ${g.notes.length ? `<span class="note">${esc(g.notes.join(', '))}</span>` : ''}
-        </div>
-        <div class="channels">${channelsHTML(g)}</div>
-      </header>
+    const key = `${g.league}-${g.id}`;
+    return `<article class="match ${g.league}" data-key="${key}" title="Game ID ${esc(g.id)}">
+      <button type="button" class="match-row" aria-expanded="false" aria-controls="mb-${key}">${matchRowHTML(g)}</button>
+      <div class="match-body" id="mb-${key}" hidden>
+        <header class="match-top">
+          <div class="match-meta">
+            ${statusHTML(g)}
+            ${g.notes.length ? `<span class="note">${esc(g.notes.join(', '))}</span>` : ''}
+          </div>
+          <div class="channels">${channelsHTML(g)}</div>
+        </header>
 
-      <div class="versus">
-        <div class="side">
-          ${logoHTML(g.away, 40)}
-          <span class="sname">${teamLink(g.league, g.away.id, esc(g.away.name))}</span>
-          ${g.state !== 'pre' && g.away.score != null ? `<span class="big-score">${esc(g.away.score)}</span>` : ''}
+        <div class="versus">
+          <div class="side">
+            ${logoHTML(g.away, 40)}
+            <span class="sname">${teamLink(g.league, g.away.id, esc(g.away.name))}</span>
+            ${g.state !== 'pre' && g.away.score != null ? `<span class="big-score">${esc(g.away.score)}</span>` : ''}
+          </div>
+          <span class="at">at</span>
+          <div class="side">
+            ${logoHTML(g.home, 40)}
+            <span class="sname">${teamLink(g.league, g.home.id, esc(g.home.name))}</span>
+            ${g.state !== 'pre' && g.home.score != null ? `<span class="big-score">${esc(g.home.score)}</span>` : ''}
+          </div>
         </div>
-        <span class="at">at</span>
-        <div class="side">
-          ${logoHTML(g.home, 40)}
-          <span class="sname">${teamLink(g.league, g.home.id, esc(g.home.name))}</span>
-          ${g.state !== 'pre' && g.home.score != null ? `<span class="big-score">${esc(g.home.score)}</span>` : ''}
-        </div>
-      </div>
 
-      <div class="compare">
-        <div class="odds-slot">${oddsMainHTML(g)}</div>
-      </div>
-      <div class="sections">
-        ${section('est', 'Our estimate', 'from past results', open)}
-        ${section('more', 'More odds', 'handicap, totals, bookmakers', open)}
-        ${section('form', 'Form and stats', 'last 5 games', open)}
-        ${section('h2h', 'Head-to-head', 'recent meetings', false)}
+        <div class="compare">
+          <div class="odds-slot">${oddsMainHTML(g)}</div>
+        </div>
+        <div class="sections">
+          ${section('est', 'Our estimate', 'from past results', open)}
+          ${section('more', 'More odds', 'handicap, totals, bookmakers', open)}
+          ${section('form', 'Form and stats', 'last 5 games', open)}
+          ${section('h2h', 'Head-to-head', 'recent meetings', false)}
+        </div>
       </div>
     </article>`;
   }
@@ -1685,18 +1722,36 @@
       <div class="matches">${list.map(matchCardHTML).join('')}</div>`;
 
     addTips(todayEl);
-    // Load form and head-to-head as each card scrolls into view.
-    observer?.disconnect();
+    // Each game starts as a one-line overview. Tapping it opens the full card,
+    // and its details (estimate, form, head-to-head) load the first time.
     const byKey = new Map(list.map(g => [`${g.league}-${g.id}`, g]));
-    const load = card => loadMatchDetail(card, byKey.get(card.dataset.key));
     const cards = [...todayEl.querySelectorAll('.match')];
-    if ('IntersectionObserver' in window) {
-      observer = new IntersectionObserver(entries => entries.forEach(e => {
-        if (e.isIntersecting) { observer.unobserve(e.target); load(e.target); }
-      }), { rootMargin: '300px' });
-      cards.forEach(c => observer.observe(c));
-    } else {
-      cards.forEach(load);
+    const setOpen = (card, open) => {
+      const btn = card.querySelector('.match-row');
+      const body = card.querySelector('.match-body');
+      btn.setAttribute('aria-expanded', open);
+      body.hidden = !open;
+      card.classList.toggle('open', open);
+      if (open) openMatches.add(card.dataset.key); else openMatches.delete(card.dataset.key);
+      if (open && !card.dataset.loaded) {
+        card.dataset.loaded = '1';
+        loadMatchDetail(card, byKey.get(card.dataset.key));
+      }
+    };
+    cards.forEach(card => {
+      card.querySelector('.match-row').addEventListener('click', () => setOpen(card, card.querySelector('.match-body').hidden));
+      if (openMatches.has(card.dataset.key)) setOpen(card, true);   // keep open after a refresh
+    });
+    const toggleAll = document.getElementById('today-toggle-all');
+    if (toggleAll) {
+      const update = () => { toggleAll.textContent = cards.length && cards.every(c => c.classList.contains('open')) ? 'Close all' : 'Open all'; };
+      toggleAll.onclick = () => {
+        const openAll = !cards.every(c => c.classList.contains('open'));
+        cards.forEach(c => setOpen(c, openAll));
+        update();
+      };
+      todayEl.querySelectorAll('.match-row').forEach(b => b.addEventListener('click', update));
+      update();
     }
     scheduleLive(list, () => state.tab === 'today' && renderToday());
   }
