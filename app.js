@@ -69,6 +69,8 @@
   const shortDate = iso => fmtUTC(iso, { day: 'numeric', month: 'short' });
   const pastDate = d => new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: '2-digit', timeZone: TZ }).format(d);
 
+  const teamLink = (league, id, label) => (id
+    ? `<a class="tlink" href="#team=${league}-${encodeURIComponent(id)}">${label}</a>` : label);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -271,6 +273,8 @@
         a: { id: String(g.away.id), a: g.away.abbr, n: g.away.short }
       };
     }
+    if (!r.h.f && g.home.name) { r.h.f = g.home.name; r.h.l = g.home.logo || ''; }
+    if (!r.a.f && g.away.name) { r.a.f = g.away.name; r.a.l = g.away.logo || ''; }
     if (odds && (g.state === 'pre' || !r.o || oddsOverride)) {
       const next = { h: odds.home, a: odds.away, d: odds.details, ou: odds.overUnder, p: odds.provider };
       if (g.state === 'pre') {
@@ -567,6 +571,23 @@
   const ODDS_SAID_TIP = 'The average chance of winning the bookmakers gave these teams. A price turns into a chance as roughly 1 ÷ price (1.25 is about 80%, 1.50 about 67%, 1.80 about 56%), with the bookmakers’ margin taken out so both teams add up to 100%.';
   const ACTUAL_TIP = 'How often these teams really won. If the odds are accurate, this should be close to the “Odds said” figure.';
 
+  // A "3 games" label that lists the games when hovered or tapped.
+  let listSeq = 0;
+  function gameListTip(label, title, items) {
+    const id = `glist-${++listSeq}`;
+    const rows = items.map(({ r, g }) => {
+      const favT = g.fav === 'h' ? r.h : r.a;
+      const p = americanTo(g.fav === 'h' ? r.o.h : r.o.a);
+      const date = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: TZ }).format(new Date(r.t));
+      const res = g.favWon == null ? 'tie' : g.favWon ? 'won' : 'lost';
+      return `<li class="${res}"><span class="gl-date">${esc(date)}</span>
+        <span class="gl-game">${esc(r.a.n)} ${r.as}–${r.hs} ${esc(r.h.n)}</span>
+        <span class="gl-fav">${esc(favT.n)} ${p ? p.decimal : ''}${g.prob != null ? ` (${Math.round(g.prob * 100)}%)` : ''} <strong>${res === 'won' ? 'won' : res === 'lost' ? 'lost' : 'tied'}</strong></span></li>`;
+    }).join('');
+    return `<button type="button" class="tip tip-list" data-tip-ref="${id}">${esc(label)}</button>
+      <div hidden id="${id}"><p class="gl-title">${esc(title)}: favourite, price and result</p><ul class="glist">${rows}</ul></div>`;
+  }
+
   function renderOddsRecord(progress) {
     const league = state.oddsLeague;
     const games = gradedGames(league);
@@ -611,7 +632,7 @@
         ? `These teams won within 5% of what the odds said, so the bookmakers’ prices have been about right.`
         : `Across ${inBand.length} ${inBand.length === 1 ? 'game' : 'games'}, the odds said these teams would win about ${Math.round(expected / 100 * inBand.length)}, and they actually won ${inBand.filter(x => x.g.favWon).length}. ${inBand.length < 20 ? 'That’s a small sample, so a couple of surprise results can make a big difference.' : ''}`;
       return `<div class="band">
-        <div class="band-head"><strong>${tipBtn(b.name, b.tip)}</strong><span>${inBand.length} ${inBand.length === 1 ? 'game' : 'games'}</span></div>
+        <div class="band-head"><strong>${tipBtn(b.name, b.tip)}</strong>${gameListTip(`${inBand.length} ${inBand.length === 1 ? 'game' : 'games'}`, b.name, inBand)}</div>
         <div class="band-bars">
           <span class="bl">${tipBtn('Odds said', ODDS_SAID_TIP)}</span><span class="track"><span class="fill exp" style="width:${expected}%"></span></span><span class="bv">${expected}%</span>
           <span class="bl">${tipBtn('Actually won', ACTUAL_TIP)}</span><span class="track"><span class="fill act" style="width:${actual}%"></span></span><span class="bv">${actual}%</span>
@@ -633,7 +654,7 @@
       const ourPick = e ? `<small class="ourpick ${e.won == null ? '' : e.won ? 'ok' : 'no'}">Our pick: ${esc((e.pick === 'h' ? r.h : r.a).n)} ${Math.round(e.conf * 100)}%${e.won == null ? '' : e.won ? ' ✓' : ' ✗'}</small>` : '';
       return `<li class="${outcome[0]}">
         <span class="odate">${esc(date)}<span class="league-tag ${r.league}">${LEAGUES[r.league].label}</span></span>
-        <span class="ogame">${esc(r.a.n)} ${r.as} <span class="muted-i">at</span> ${esc(r.h.n)} ${r.hs}</span>
+        <span class="ogame">${teamLink(r.league, r.a.id, esc(r.a.n))} ${r.as} <span class="muted-i">at</span> ${teamLink(r.league, r.h.id, esc(r.h.n))} ${r.hs}</span>
         <span class="ofav">Favourite: ${esc(favT.n)}${price ? ` <span class="frac">${price.decimal}</span>` : ''}${extras ? `<small>${esc(extras)}</small>` : ''}${ourPick}</span>
         <span class="oresult">${outcome[1]}</span>
       </li>`;
@@ -705,11 +726,11 @@
   // ---------- schedule ----------
   const scheduleEl = document.getElementById('schedule');
 
-  function teamHTML(t, showScore, isHome) {
+  function teamHTML(t, showScore, isHome, league) {
     const score = showScore && t.score != null ? `<span class="score${t.winner ? ' win' : ''}">${esc(t.score)}</span>` : '';
     return `<div class="team${isHome ? ' home' : ''}">
       ${logoHTML(t, 28)}
-      <span class="tname"><span class="full">${esc(t.name)}</span><span class="abbr">${esc(t.short)}</span></span>
+      <span class="tname">${teamLink(league, t.id, `<span class="full">${esc(t.name)}</span><span class="abbr">${esc(t.short)}</span>`)}</span>
       ${t.record && !showScore ? `<span class="rec">${esc(t.record)}</span>` : ''}
       ${score}
     </div>`;
@@ -750,8 +771,8 @@
           ${statusHTML(g)}
           ${extra.length ? `<span class="note">${esc(extra.join(', '))}</span>` : ''}
         </div>
-        ${teamHTML(g.away, g.state !== 'pre', false)}
-        ${teamHTML(g.home, g.state !== 'pre', true)}
+        ${teamHTML(g.away, g.state !== 'pre', false, g.league)}
+        ${teamHTML(g.home, g.state !== 'pre', true, g.league)}
         ${scheduleOddsHTML(g)}
       </div>
       <div class="channels">
@@ -927,11 +948,15 @@
   tipEl.hidden = true;
   document.body.appendChild(tipEl);
   let tipFor = null;
+  let hideTimer = null;
 
   function showTip(btn) {
     if (tipFor && tipFor !== btn) tipFor.removeAttribute('aria-describedby');
+    clearTimeout(hideTimer);
     tipFor = btn;
-    tipEl.textContent = btn.dataset.tip;
+    const ref = btn.dataset.tipRef && document.getElementById(btn.dataset.tipRef);
+    if (ref) tipEl.innerHTML = ref.innerHTML; else tipEl.textContent = btn.dataset.tip;
+    tipEl.classList.toggle('tooltip-list', !!ref);
     tipEl.hidden = false;
     btn.setAttribute('aria-describedby', 'tooltip');
     const r = btn.getBoundingClientRect();
@@ -955,8 +980,14 @@
   });
   document.addEventListener('mouseout', e => {
     const b = e.target.closest?.('.tip');
-    if (b && canHover() && !b.contains(e.relatedTarget)) hideTip();
+    if (b && canHover() && !b.contains(e.relatedTarget)) {
+      // Give the pointer a moment to move onto a list so it can be scrolled.
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(hideTip, b.dataset.tipRef ? 250 : 0);
+    }
   });
+  tipEl.addEventListener('mouseenter', () => clearTimeout(hideTimer));
+  tipEl.addEventListener('mouseleave', () => { if (canHover()) hideTip(); });
   document.addEventListener('click', e => {
     const b = e.target.closest?.('.tip');
     if (!b) { if (!e.target.closest?.('.tooltip')) hideTip(); return; }
@@ -965,7 +996,7 @@
   document.addEventListener('focusin', e => { const b = e.target.closest?.('.tip'); if (b) showTip(b); });
   document.addEventListener('focusout', e => { if (e.target.closest?.('.tip')) hideTip(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') hideTip(); });
-  window.addEventListener('scroll', () => { if (!tipEl.hidden) hideTip(); }, { passive: true });
+  window.addEventListener('scroll', () => { if (!tipEl.hidden && !tipEl.matches(':hover')) hideTip(); }, { passive: true });
 
   // ---------- games today: odds markets ----------
   const todayEl = document.getElementById('today');
@@ -1511,13 +1542,13 @@
       <div class="versus">
         <div class="side">
           ${logoHTML(g.away, 40)}
-          <span class="sname">${esc(g.away.name)}</span>
+          <span class="sname">${teamLink(g.league, g.away.id, esc(g.away.name))}</span>
           ${g.state !== 'pre' && g.away.score != null ? `<span class="big-score">${esc(g.away.score)}</span>` : ''}
         </div>
         <span class="at">at</span>
         <div class="side">
           ${logoHTML(g.home, 40)}
-          <span class="sname">${esc(g.home.name)}</span>
+          <span class="sname">${teamLink(g.league, g.home.id, esc(g.home.name))}</span>
           ${g.state !== 'pre' && g.home.score != null ? `<span class="big-score">${esc(g.home.score)}</span>` : ''}
         </div>
       </div>
@@ -1718,7 +1749,7 @@
       }).join('');
       return `<tr><td class="pos">${i + 1}</td>
         <th scope="row" class="tcell">${logo ? `<img src="${esc(logo)}" alt="" width="22" height="22" loading="lazy">` : ''}
-          <span class="full">${esc(t.displayName || t.name)}</span><span class="abbr">${esc(t.abbreviation || t.shortDisplayName)}</span></th>${cells}</tr>`;
+          ${teamLink(league, t.id, `<span class="full">${esc(t.displayName || t.name)}</span><span class="abbr">${esc(t.abbreviation || t.shortDisplayName)}</span>`)}</th>${cells}</tr>`;
     }).join('');
     return `<section class="table-block"><h2 class="group-head">${esc(group.name)}</h2>
       <div class="table-wrap"><table>
@@ -1929,6 +1960,215 @@
     }
   })();
 
+  // ---------- team page: historical odds for one team ----------
+  const teamView = document.createElement('section');
+  teamView.className = 'team-view';
+  teamView.hidden = true;
+  teamView.setAttribute('role', 'dialog');
+  teamView.setAttribute('aria-modal', 'true');
+  teamView.setAttribute('aria-labelledby', 'team-title');
+  document.body.appendChild(teamView);
+  let teamOpenedInApp = false;
+  let teamScope = 'season';
+  let teamReturnFocus = null;
+  let currentTeam = null;
+
+  document.addEventListener('click', e => {
+    const a = e.target.closest?.('a.tlink');
+    if (a && e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+      teamOpenedInApp = true;
+      teamReturnFocus = a;
+    }
+  });
+
+  function teamRow(r, id) {
+    const side = r.h.id === id ? 'h' : 'a';
+    const other = side === 'h' ? 'a' : 'h';
+    const me = r[side], opp = r[other];
+    const o = r.o || {};
+    const mp = americanTo(o[side]), op = americanTo(o[other]);
+    const chance = mp && op ? mp.implied / (mp.implied + op.implied) : null;
+    const done = r.hs != null;
+    const g = done ? grade(r) : null;
+    const my = side === 'h' ? r.hs : r.as, their = side === 'h' ? r.as : r.hs;
+    const won = done ? (my > their ? true : my < their ? false : null) : null;
+    const fav = g ? g.fav === side : chance != null ? chance > 0.5 : null;
+    let covered = null;
+    if (g?.cover && g.cover !== 'push') covered = (g.fav === side) === (g.cover === 'yes');
+    const sl = spreadLines({ home: { abbr: r.h.a }, away: { abbr: r.a.a } }, { details: o.d });
+    const line = sl ? (side === 'h' ? sl.home : sl.away) : null;
+    const e = done && g ? gradeEstimate(r, g) : null;
+    return {
+      r, side, me, opp, home: side === 'h', done, chance, won, fav, covered, line,
+      price: mp, openPrice: americanTo(r.o0?.[side]), my, their,
+      total: g?.total || null, ou: o.ou,
+      ourPick: e ? e.pick === side : null, ourRight: e ? e.won : null, ourConf: e ? e.conf : null
+    };
+  }
+
+  function teamStatsHTML(rows) {
+    const done = rows.filter(x => x.done && x.won != null);
+    const wl = list => `${list.filter(x => x.won).length}–${list.filter(x => !x.won).length}`;
+    const pc = (n, d) => (d ? `${Math.round((n / d) * 100)}%` : '–');
+    const favs = done.filter(x => x.fav === true), dogs = done.filter(x => x.fav === false);
+    const ats = rows.filter(x => x.covered != null);
+    const overs = rows.filter(x => x.total === 'over').length, unders = rows.filter(x => x.total === 'under').length;
+    const ours = rows.filter(x => x.ourRight != null);
+    const avgChance = done.filter(x => x.chance != null);
+    const exp = avgChance.reduce((t, x) => t + x.chance, 0);
+    const box = (label, tip, value, sub) => `<div class="tstat"><dt>${tipBtn(esc(label), tip)}</dt><dd>${value}${sub ? ` <small>${sub}</small>` : ''}</dd></div>`;
+    return `<dl class="tstats">
+      ${box('Record', 'Wins and losses in the finished games saved with odds.', wl(done), '')}
+      ${box('As favourite', 'Results when the bookmakers made this team the favourite (shorter price).', favs.length ? wl(favs) : '–', favs.length ? `won ${pc(favs.filter(x => x.won).length, favs.length)}` : '')}
+      ${box('As underdog', 'Results when this team was the underdog (longer price). Wins here are upsets.', dogs.length ? wl(dogs) : '–', dogs.length ? `won ${pc(dogs.filter(x => x.won).length, dogs.length)}` : '')}
+      ${box('Wins vs odds', 'How many games the odds expected this team to win in total (adding up its win chance in each game), compared with how many it actually won. More actual wins means the team has beaten the odds.',
+        avgChance.length ? `${avgChance.filter(x => x.won).length} won` : '–', avgChance.length ? `odds expected ${exp.toFixed(1)}` : '')}
+      ${box('Handicap record', 'How often this team landed the bookmakers’ handicap (spread), whether favourite or underdog. Pushes are left out.',
+        ats.length ? `${ats.filter(x => x.covered).length}–${ats.filter(x => !x.covered).length}` : '–', ats.length ? `covered ${pc(ats.filter(x => x.covered).length, ats.length)}` : '')}
+      ${box('Over / under', 'How often this team’s games went over or under the bookmakers’ points total.',
+        overs + unders ? `${overs}–${unders}` : '–', overs + unders ? `overs ${pc(overs, overs + unders)}` : '')}
+      ${box('Our estimate', 'How often our estimate picked the right winner in this team’s games.',
+        ours.length ? `${ours.filter(x => x.ourRight).length} of ${ours.length}` : '–', ours.length ? `right ${pc(ours.filter(x => x.ourRight).length, ours.length)}` : '')}
+    </dl>`;
+  }
+
+  function teamChartHTML(rows) {
+    const pts = rows.filter(x => x.done && x.chance != null).slice().reverse();
+    if (pts.length < 2) return '';
+    const narrow = window.innerWidth < 600;
+    const W = narrow ? 360 : 640, H = narrow ? 190 : 170, pad = { l: 34, r: 10, t: 12, b: 22 };
+    const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+    const x = i => pad.l + (pts.length === 1 ? iw / 2 : (i * iw) / (pts.length - 1));
+    const y = c => pad.t + (1 - c) * ih;
+    const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(p.chance).toFixed(1)}`).join(' ');
+    const fmt = d => new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: TZ }).format(new Date(d));
+    const dots = pts.map((p, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(p.chance).toFixed(1)}" r="5" class="${p.won == null ? 'dt' : p.won ? 'dw' : 'dl'}">
+      <title>${esc(`${fmt(p.r.t)}: ${p.home ? 'vs' : 'at'} ${p.opp.n}, ${Math.round(p.chance * 100)}% chance, ${p.won == null ? 'tied' : p.won ? 'won' : 'lost'} ${p.my}–${p.their}`)}</title></circle>`).join('');
+    const grid = [0.25, 0.5, 0.75].map(c => `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(c)}" y2="${y(c)}" class="${c === 0.5 ? 'g50' : 'g'}"/>
+      <text x="${pad.l - 6}" y="${y(c) + 4}" text-anchor="end">${c * 100}%</text>`).join('');
+    return `<figure class="tchart">
+      <figcaption>${tipBtn('Win chance the odds gave, game by game', 'Each dot is a finished game, oldest on the left. Its height is the chance of winning the bookmakers’ price gave this team. Green dots are wins, red are losses. Hover over or tap a dot for the details.')}</figcaption>
+      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Chart of the win chance the odds gave in each game, with results">
+        ${grid}<path d="${line}" class="pl"/>${dots}
+        <text x="${pad.l}" y="${H - 4}">${esc(fmt(pts[0].r.t))}</text>
+        <text x="${W - pad.r}" y="${H - 4}" text-anchor="end">${esc(fmt(pts[pts.length - 1].r.t))}</text>
+      </svg>
+      <p class="legend"><span class="lg dw"></span>Won <span class="lg dl"></span>Lost</p>
+    </figure>`;
+  }
+
+  function teamUpcomingHTML(rows, league) {
+    const up = rows.filter(x => !x.done && x.r.t > Date.now() - 4 * 36e5 && x.price).reverse();
+    if (!up.length) return '';
+    const when = t => new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: TZ }).format(new Date(t));
+    return `<h3 class="tsub">Coming up</h3>
+      <ul class="tup">${up.map(x => {
+        const moved = x.openPrice && x.openPrice.decimal !== x.price.decimal
+          ? ` <span class="mv ${+x.price.decimal < +x.openPrice.decimal ? 'in' : 'out'}">${+x.price.decimal < +x.openPrice.decimal ? '▼' : '▲'} from ${x.openPrice.decimal}</span>` : '';
+        return `<li><span class="tu-when">${esc(when(x.r.t))}</span>
+          <span class="tu-opp">${x.home ? 'vs' : 'at'} ${teamLink(league, x.opp.id, esc(x.opp.f || x.opp.n))}</span>
+          <span class="tu-odds"><strong>${x.price.decimal}</strong> <span class="frac">${x.price.fractional}</span>${moved}
+          ${x.chance != null ? `<small>${Math.round(x.chance * 100)}% chance</small>` : ''}
+          ${x.line != null ? `<small>Handicap ${signedLine(x.line)}</small>` : ''}${x.ou != null ? `<small>Total ${esc(x.ou)}</small>` : ''}</span></li>`;
+      }).join('')}</ul>`;
+  }
+
+  function teamTableHTML(rows, league) {
+    const done = rows.filter(x => x.done);
+    if (!done.length) return '<p class="muted">No finished games with odds saved for this team yet.</p>';
+    const date = t => new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: '2-digit', timeZone: TZ }).format(new Date(t));
+    const yn = (v, a, b) => (v == null ? '–' : `<span class="${v ? 'ok' : 'no'}">${v ? a : b}</span>`);
+    return `<h3 class="tsub">Game by game</h3>
+      <div class="table-wrap"><table class="ttable">
+        <thead><tr>
+          <th scope="col" class="tcell">Date</th><th scope="col" class="tcell">Opponent</th>
+          <th scope="col"><abbr title="Decimal price to win">Price</abbr></th><th scope="col"><abbr title="Win chance from the odds">Chance</abbr></th>
+          <th scope="col">Result</th><th scope="col">Handicap</th><th scope="col"><abbr title="Over or under the points total">Total</abbr></th><th scope="col">Our pick</th>
+        </tr></thead>
+        <tbody>${done.map(x => `<tr>
+          <td class="tcell">${esc(date(x.r.t))}</td>
+          <td class="tcell">${x.home ? 'vs' : 'at'} ${teamLink(league, x.opp.id, esc(x.opp.n))}</td>
+          <td>${x.price ? x.price.decimal : '–'}${x.fav === true ? ' <span class="fav-tag" title="Favourite">F</span>' : ''}</td>
+          <td>${x.chance != null ? `${Math.round(x.chance * 100)}%` : '–'}</td>
+          <td>${yn(x.won, 'W', 'L')} ${x.my}–${x.their}</td>
+          <td>${x.line != null ? `${signedLine(x.line)} ` : ''}${yn(x.covered, '✓', '✗')}</td>
+          <td>${x.total ? `${x.total === 'over' ? 'Over' : x.total === 'under' ? 'Under' : 'Push'} ${esc(x.ou ?? '')}` : '–'}</td>
+          <td>${x.ourRight == null ? '–' : `${esc(x.ourPick ? x.me.a : x.opp.a)} ${Math.round(x.ourConf * 100)}% ${yn(x.ourRight, '✓', '✗')}`}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+      <p class="hint left">F marks games where they were the favourite. Handicap shows their line and whether they landed it.</p>`;
+  }
+
+  function renderTeam(league, id, progress) {
+    const all = Object.values(hist).filter(r => r.league === league && (r.h.id === id || r.a.id === id)).sort((a, b) => b.t - a.t);
+    const latestYr = Math.max(0, ...all.map(r => r.yr || 0));
+    const scoped = teamScope === 'season' ? all.filter(r => r.yr === latestYr) : all;
+    const rows = scoped.map(r => teamRow(r, id));
+    const sample = all[0] ? (all[0].h.id === id ? all[0].h : all[0].a) : null;
+    const name = sample?.f || sample?.n || 'Team';
+    const logo = all.map(r => (r.h.id === id ? r.h.l : r.a.l)).find(Boolean);
+
+    teamView.innerHTML = `<div class="tv-bar">
+        <button type="button" class="tv-back" id="team-close"><span aria-hidden="true">‹</span> Back</button>
+        <span class="league-tag ${league}">${LEAGUES[league].label}</span>
+      </div>
+      <div class="tv-body">
+        <header class="tv-head">
+          ${logo ? `<img src="${esc(logo)}" alt="" width="56" height="56">` : ''}
+          <div><h2 id="team-title">${esc(name)}</h2><p class="muted-i">Odds history</p></div>
+        </header>
+        ${progress ? `<div class="notice slim left"><span class="spinner" aria-hidden="true"></span>${esc(progress)}</div>` : ''}
+        ${all.length ? `
+          <div class="seg tv-scope" role="group" aria-label="Which games">
+            <button type="button" data-scope="season" aria-pressed="${teamScope === 'season'}">This season</button>
+            <button type="button" data-scope="all" aria-pressed="${teamScope === 'all'}">All saved</button>
+          </div>
+          ${teamStatsHTML(rows)}
+          ${teamChartHTML(rows)}
+          ${teamUpcomingHTML(rows, league)}
+          ${teamTableHTML(rows, league)}`
+        : (progress ? '' : '<div class="notice empty"><p>No odds saved for this team yet.</p><p>Open the Odds record tab to fill in this season’s games, then come back.</p></div>')}
+        <p class="gamble">From the games saved in your Odds record, using the last odds ESPN listed before each game. Each phone or browser keeps its own history.
+          Past results don't predict future ones. If you bet, you must be 18+. For free support, visit <a href="https://www.begambleaware.org" rel="noopener">BeGambleAware.org</a>.</p>
+      </div>`;
+    teamView.querySelector('#team-close').addEventListener('click', leaveTeam);
+    teamView.querySelectorAll('[data-scope]').forEach(b => b.addEventListener('click', () => {
+      teamScope = b.dataset.scope; renderTeam(league, id);
+    }));
+  }
+
+  async function openTeam(league, id) {
+    const first = teamView.hidden || currentTeam !== `${league}-${id}`;
+    currentTeam = `${league}-${id}`;
+    if (first) teamScope = 'season';
+    hideTip();
+    renderTeam(league, id, 'Checking for more past games…');
+    teamView.hidden = false;
+    teamView.scrollTop = 0;
+    document.body.classList.add('team-open');
+    teamView.querySelector('#team-close')?.focus();
+    await backfillOdds();
+    if (currentTeam === `${league}-${id}` && !teamView.hidden) renderTeam(league, id);
+  }
+  function closeTeamView() {
+    if (teamView.hidden) return;
+    teamView.hidden = true;
+    currentTeam = null;
+    document.body.classList.remove('team-open');
+    teamReturnFocus?.focus?.();
+  }
+  function leaveTeam() {
+    if (teamOpenedInApp) { teamOpenedInApp = false; history.back(); }
+    else { history.replaceState(null, '', location.pathname + location.search); closeTeamView(); }
+  }
+  function routeFromHash() {
+    const m = /^#team=(nfl|nba)-([^&]+)/.exec(location.hash);
+    if (m) openTeam(m[1], decodeURIComponent(m[2]));
+    else closeTeamView();
+  }
+  window.addEventListener('hashchange', routeFromHash);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !teamView.hidden && tipEl.hidden) leaveTeam(); });
+
   // ---------- keep odds fresh ----------
   // Bookmakers release and move lines all week, so re-check every 10 minutes
   // while the app is open, and straight away when it's reopened.
@@ -1948,4 +2188,5 @@
   // ---------- start ----------
   renderMine();
   selectTab(state.tab);
+  routeFromHash();
 })();

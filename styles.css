@@ -448,6 +448,83 @@ tbody .tcell { display: flex; align-items: center; gap: 0.55rem; }
   .players li { font-size: 0.75rem; }
 }
 
+/* ---------- team links and page ---------- */
+.tlink { color: inherit; text-decoration: none; border-bottom: 1px solid transparent; }
+.tlink:hover { border-bottom-color: currentColor; }
+.tlink:focus-visible { outline-offset: 1px; }
+body.team-open { overflow: hidden; }
+.team-view {
+  position: fixed; inset: 0; z-index: 40; overflow-y: auto; background: var(--paper);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.team-view[hidden] { display: none; }
+.tv-bar {
+  position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between;
+  background: var(--mast-bg); color: var(--mast-fg);
+  padding: calc(env(safe-area-inset-top, 0px) + 0.6rem) 1.25rem 0.6rem;
+}
+.tv-bar .league-tag.nfl, .tv-bar .league-tag.nba { color: var(--mast-fg); }
+.tv-back { border: 0; background: none; color: var(--mast-fg); font-weight: 600; font-size: 1rem; padding: 0.3rem 0.2rem; }
+.tv-back span { font-size: 1.4rem; line-height: 0; vertical-align: -0.1em; margin-right: 0.2rem; }
+.tv-body { max-width: 64rem; margin: 0 auto; padding: 1.25rem 1.25rem 2.5rem; }
+.tv-head { display: flex; align-items: center; gap: 0.9rem; margin-bottom: 1rem; }
+.tv-head img { width: 56px; height: 56px; object-fit: contain; }
+.tv-head h2 { margin: 0; font: 800 clamp(1.8rem, 6vw, 2.8rem)/1 var(--display); }
+.tv-head p { margin: 0.2rem 0 0; }
+.tv-scope { margin-bottom: 1rem; }
+.tstats {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: 0.6rem; margin: 0 0 1.5rem;
+}
+.tstat { background: var(--panel); border: 1px solid var(--rule); border-radius: 0.75rem; padding: 0.7rem 0.8rem; }
+.tstat dt { color: var(--ink-soft); font-size: 0.8rem; }
+.tstat dd { margin: 0.25rem 0 0; font: 700 1.5rem/1 var(--display); font-variant-numeric: tabular-nums; }
+.tstat small { display: block; margin-top: 0.25rem; font: 500 0.78rem var(--body); color: var(--ink-soft); }
+.tchart { margin: 0 0 1.5rem; background: var(--panel); border: 1px solid var(--rule); border-radius: 0.75rem; padding: 0.8rem 0.9rem 0.6rem; }
+.tchart figcaption { font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem; }
+.tchart svg { width: 100%; height: auto; display: block; }
+.tchart text { font-size: 11px; fill: var(--ink-soft); font-family: var(--body); }
+.tchart .g { stroke: var(--rule); stroke-width: 1; }
+.tchart .g50 { stroke: var(--ink-soft); stroke-width: 1; stroke-dasharray: 4 4; }
+.tchart .pl { fill: none; stroke: var(--ink-soft); stroke-width: 1.5; opacity: 0.6; }
+.tchart circle { stroke: var(--panel); stroke-width: 2; cursor: help; }
+.dw { fill: var(--win); background: var(--win); }
+.dl { fill: var(--loss); background: var(--loss); }
+.dt { fill: var(--ink-soft); }
+.legend { margin: 0.3rem 0 0; font-size: 0.78rem; color: var(--ink-soft); display: flex; align-items: center; gap: 0.35rem; }
+.lg { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 50%; margin-left: 0.5rem; }
+.tsub { font: 700 1.3rem/1.1 var(--display); margin: 0 0 0.6rem; }
+.tup { list-style: none; margin: 0 0 1.5rem; padding: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 0.75rem; }
+.tup li { display: grid; grid-template-columns: 9rem minmax(0, 1fr) auto; gap: 0.75rem; align-items: center; padding: 0.65rem 0.9rem; }
+.tup li + li { border-top: 1px solid var(--rule); }
+.tu-when { color: var(--ink-soft); font-size: 0.85rem; }
+.tu-opp { font-weight: 600; }
+.tu-odds { text-align: right; font-variant-numeric: tabular-nums; }
+.tu-odds small { display: block; color: var(--ink-soft); font-size: 0.75rem; }
+.ttable td, .ttable th { font-size: 0.85rem; }
+.ttable tbody .tcell { display: table-cell; font-weight: 500; }
+.ttable .ok { color: var(--win); font-weight: 700; }
+.ttable .no { color: var(--loss); font-weight: 700; }
+.fav-tag { display: inline-block; font-size: 0.65rem; font-weight: 700; padding: 0 0.25rem; border-radius: 0.2rem; background: var(--rule); color: var(--ink); }
+@media (max-width: 760px) {
+  .tv-body { padding: 0.9rem 0.75rem 2rem; }
+  .tv-bar { padding-left: 0.75rem; padding-right: 0.75rem; }
+  .tstats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
+  .tstat dd { font-size: 1.25rem; }
+  .tup li { grid-template-columns: minmax(0, 1fr) auto; }
+  .tu-when { grid-column: 1 / -1; font-size: 0.75rem; }
+}
+
+/* ---------- game lists in descriptions ---------- */
+.tooltip-list { max-width: min(24rem, calc(100vw - 16px)); max-height: min(22rem, 60vh); overflow-y: auto; }
+.gl-title { margin: 0 0 0.4rem; font-weight: 700; }
+.glist { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.35rem; }
+.glist li { display: grid; grid-template-columns: 3.4rem 1fr; gap: 0 0.5rem; font-size: 0.78rem; line-height: 1.35; }
+.gl-date { opacity: 0.7; grid-row: span 2; }
+.gl-fav { opacity: 0.85; }
+.glist li.won strong { color: #6be3a8; }
+.glist li.lost strong { color: #ff8a9b; }
+.tip-list { color: var(--ink-soft); font-size: 0.85rem; }
+
 /* ---------- descriptions ---------- */
 .tip {
   border: 0; background: none; padding: 0; margin: 0;
@@ -458,7 +535,7 @@ tbody .tcell { display: flex; align-items: center; gap: 0.55rem; }
 .tip:hover { color: var(--ink); text-decoration-style: solid; }
 .tooltip {
   position: absolute; z-index: 50; max-width: min(19rem, calc(100vw - 16px));
-  background: var(--ink); color: var(--paper);
+  background: #141B2D; color: #F4F6FA; border: 1px solid #2E3854;
   padding: 0.6rem 0.75rem; border-radius: 0.5rem;
   font-size: 0.82rem; line-height: 1.45; text-align: left;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
