@@ -104,6 +104,7 @@
     const n = parseFloat(String(v).replace('+', ''));
     return Number.isFinite(n) ? n : null;
   }
+  const lineNum = v => (v == null ? null : toNum(String(v).replace(/^[ou]/i, '')));
   function parseOdds(o) {
     if (!o) return null;
     const ml = side => toNum(
@@ -115,18 +116,36 @@
       details: o.details || '',
       overUnder: o.overUnder ?? null,
       home: ml('home'),
-      away: ml('away')
+      away: ml('away'),
+      homeOpen: toNum(o.moneyline?.home?.open?.odds),
+      awayOpen: toNum(o.moneyline?.away?.open?.odds),
+      spreadHome: lineNum(o.pointSpread?.home?.close?.line ?? o.pointSpread?.home?.open?.line),
+      spreadAway: lineNum(o.pointSpread?.away?.close?.line ?? o.pointSpread?.away?.open?.line),
+      spreadHomePrice: toNum(o.homeTeamOdds?.spreadOdds ?? o.pointSpread?.home?.close?.odds),
+      spreadAwayPrice: toNum(o.awayTeamOdds?.spreadOdds ?? o.pointSpread?.away?.close?.odds),
+      overPrice: toNum(o.overOdds ?? o.total?.over?.close?.odds),
+      underPrice: toNum(o.underOdds ?? o.total?.under?.close?.odds)
     };
+    if (odds.overUnder == null) odds.overUnder = lineNum(o.total?.over?.close?.line ?? o.total?.over?.open?.line);
     return (odds.home != null || odds.away != null || odds.details) ? odds : null;
   }
   const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+  // Snap to the nearest fraction a UK bookmaker would actually show.
+  const UK_FRACTIONS = ['1/10','1/8','1/7','1/6','1/5','2/9','1/4','2/7','3/10','1/3','4/11','2/5','4/9','1/2','8/15',
+    '4/7','8/13','4/6','8/11','4/5','5/6','10/11','Evens','11/10','6/5','5/4','11/8','6/4','13/8','7/4','15/8','2/1',
+    '9/4','5/2','11/4','3/1','10/3','7/2','4/1','9/2','5/1','11/2','6/1','13/2','7/1','15/2','8/1','9/1','10/1',
+    '11/1','12/1','14/1','16/1','20/1','25/1','33/1','40/1','50/1','66/1','100/1'];
+  const fracVal = f => (f === 'Evens' ? 1 : f.split('/').reduce((n, d) => n / d));
+  function ukFraction(ratio) {
+    return UK_FRACTIONS.reduce((best, f) => (Math.abs(fracVal(f) - ratio) < Math.abs(fracVal(best) - ratio) ? f : best));
+  }
   function americanTo(ml) {
     if (ml == null || ml === 0) return null;
     const [num, den] = ml > 0 ? [ml, 100] : [100, Math.abs(ml)];
     const g = gcd(Math.round(num), Math.round(den)) || 1;
     return {
       decimal: (1 + num / den).toFixed(2),
-      fractional: num === den ? 'Evens' : `${Math.round(num) / g}/${Math.round(den) / g}`,
+      fractional: ukFraction(num / den),
       implied: ml > 0 ? 100 / (ml + 100) : -ml / (-ml + 100)
     };
   }
@@ -173,6 +192,7 @@
       seasonYear: ev.season?.year,
       venue: comp.venue?.fullName || '',
       international: !!country && !/^(usa|united states)$/i.test(country),
+      neutral: !!comp.neutralSite,
       notes: (comp.notes || []).map(n => n.headline).filter(Boolean),
       odds: parseOdds(comp.odds?.[0]),
       usTv
@@ -251,13 +271,50 @@
       };
     }
     if (odds && (g.state === 'pre' || !r.o || oddsOverride)) {
-      r.o = { h: odds.home, a: odds.away, d: odds.details, ou: odds.overUnder, p: odds.provider };
+      const next = { h: odds.home, a: odds.away, d: odds.details, ou: odds.overUnder, p: odds.provider };
+      if (g.state === 'pre') {
+        const now = Date.now();
+        if (!r.seen) r.seen = now;                 // when this app first saw odds for the game
+        if (!r.o0) {
+          r.o0 = { h: odds.homeOpen ?? odds.home, a: odds.awayOpen ?? odds.away, d: odds.details, ou: odds.overUnder };
+        }
+        if (r.o && (r.o.h !== next.h || r.o.a !== next.a || r.o.d !== next.d || r.o.ou !== next.ou)) r.chg = now;
+      }
+      r.o = next;
     }
     if (g.state === 'post') {
       const hs = toNum(g.home.score), as = toNum(g.away.score);
       if (hs != null && as != null) { r.hs = hs; r.as = as; }
     }
     persistHistory();
+  }
+
+  // Opening vs current odds for an upcoming game, plus "new" / "moved" flags.
+  const NEW_ODDS_HOURS = 12;
+  const MOVED_HOURS = 24;
+  function oddsNews(g) {
+    const r = hist[`${g.league}-${g.id}`];
+    if (!r || !g.odds || g.state !== 'pre') return null;
+    const now = Date.now();
+    const o0 = r.o0 || {};
+    const moved = side => {
+      const from = americanTo(o0[side]), to = americanTo(side === 'h' ? g.odds.home : g.odds.away);
+      return from && to && from.decimal !== to.decimal ? { from: from.decimal, to: to.decimal, shorter: +to.decimal < +from.decimal } : null;
+    };
+    return {
+      isNew: r.seen && now - r.seen < NEW_ODDS_HOURS * 36e5 && !r.chg,
+      movedRecently: r.chg && now - r.chg < MOVED_HOURS * 36e5,
+      home: moved('h'),
+      away: moved('a'),
+      openDetails: o0.d && o0.d !== g.odds.details ? o0.d : null,
+      openTotal: o0.ou != null && o0.ou !== g.odds.overUnder ? o0.ou : null
+    };
+  }
+  function newsBadge(n) {
+    if (!n) return '';
+    if (n.movedRecently) return '<span class="badge moved">Odds moved</span>';
+    if (n.isNew) return '<span class="badge new">New odds</span>';
+    return '';
   }
 
   // Work out what the odds said and whether it happened.
@@ -521,6 +578,28 @@
     </div>`;
   }
 
+  function scheduleOddsHTML(g) {
+    if (g.state !== 'pre') return '';
+    if (!g.odds) return '<p class="sodds none">Odds not out yet</p>';
+    const n = oddsNews(g);
+    const price = (t, ml, mv) => {
+      const x = americanTo(ml);
+      if (!x) return '';
+      const move = mv ? ` <span class="mv ${mv.shorter ? 'in' : 'out'}" title="Was ${mv.from}">${mv.shorter ? '▼' : '▲'} from ${mv.from}</span>` : '';
+      return `<span class="sp"><span class="who">${esc(t.abbr || t.short)}</span> <strong>${x.decimal}</strong>${move}</span>`;
+    };
+    const line = [
+      g.odds.details ? `Spread ${esc(g.odds.details)}${n?.openDetails ? ` <span class="was">(opened ${esc(n.openDetails)})</span>` : ''}` : '',
+      g.odds.overUnder ? `Total ${esc(g.odds.overUnder)}${n?.openTotal != null ? ` <span class="was">(opened ${esc(n.openTotal)})</span>` : ''}` : ''
+    ].filter(Boolean).join(', ');
+    return `<div class="sodds">
+      ${newsBadge(n)}
+      ${price(g.away, g.odds.away, n?.away)}
+      ${price(g.home, g.odds.home, n?.home)}
+      ${line ? `<span class="sline">${line}</span>` : ''}
+    </div>`;
+  }
+
   function gameHTML(g) {
     const extra = [...g.notes, g.international && g.venue ? g.venue : ''].filter(Boolean);
     return `<article class="game ${g.league}" title="Game ID ${esc(g.id)}">
@@ -536,6 +615,7 @@
         </div>
         ${teamHTML(g.away, g.state !== 'pre', false)}
         ${teamHTML(g.home, g.state !== 'pre', true)}
+        ${scheduleOddsHTML(g)}
       </div>
       <div class="channels">
         ${channelsHTML(g)}
@@ -645,14 +725,39 @@
     };
   }
 
-  // ---------- games today: render ----------
+  // ---------- games today: odds markets ----------
   const todayEl = document.getElementById('today');
   let observer = null;
 
-  function oddsRows(g) {
+  const price = ml => {
+    const x = americanTo(ml);
+    return x ? `<strong>${x.decimal}</strong> <span class="frac">${x.fractional}</span>` : '–';
+  };
+  const signedLine = v => (v == null ? '' : v > 0 ? `+${v}` : v === 0 ? 'PK' : `${v}`);
+
+  // Spread line for each side, from ESPN's spread fields or the "KC -3.5" text.
+  function spreadLines(g, o) {
+    if (!o) return null;
+    let h = o.spreadHome, a = o.spreadAway;
+    if (h == null && a == null) {
+      const m = /^([A-Za-z]{2,4})\s+([+-]?\d+(?:\.\d+)?)/.exec(o.details || '');
+      if (m) {
+        const v = parseFloat(m[2]);
+        if (m[1].toUpperCase() === (g.home.abbr || '').toUpperCase()) { h = v; a = -v; }
+        else if (m[1].toUpperCase() === (g.away.abbr || '').toUpperCase()) { a = v; h = -v; }
+      } else if (/^(even|pk|pick)/i.test(o.details || '')) { h = 0; a = 0; }
+    }
+    if (h == null && a != null) h = -a;
+    if (a == null && h != null) a = -h;
+    return h == null ? null : { home: h, away: a };
+  }
+
+  // The always-visible odds: win chance bar and match prices.
+  function oddsMainHTML(g) {
     const o = g.odds;
-    if (!o) return '';
+    if (!o) return '<p class="muted">Odds not out yet for this game.</p>';
     const a = americanTo(o.away), h = americanTo(o.home);
+    const n = oddsNews(g);
     let bar = '';
     if (a && h) {
       const total = a.implied + h.implied;
@@ -663,17 +768,196 @@
         <span class="pct">${hp}%</span>
       </div>`;
     }
-    const price = x => x ? `<strong>${x.decimal}</strong> <span class="frac">${x.fractional}</span>` : '–';
     return `
+      ${newsBadge(n) ? `<div class="badge-row">${newsBadge(n)}</div>` : ''}
       ${bar ? `<div class="row full"><span class="lbl">Win chance from the odds</span>${bar}</div>` : ''}
-      <div class="row"><span class="v">${price(a)}</span><span class="lbl">To win</span><span class="v">${price(h)}</span></div>
-      ${o.details || o.overUnder ? `<div class="row full"><span class="lbl">Line</span><span class="line">${esc([
-        o.details ? `Spread ${o.details}` : '', o.overUnder ? `Total points ${o.overUnder}` : ''
-      ].filter(Boolean).join(', '))}</span></div>` : ''}
-      ${o.provider ? `<p class="provider">Odds from ${esc(o.provider)}</p>` : ''}`;
+      <div class="row"><span class="v">${price(o.away)}</span><span class="lbl">To win</span><span class="v">${price(o.home)}</span></div>`;
+  }
+
+  // Every other market: spread with prices, totals, opening prices, other bookmakers.
+  function oddsMoreHTML(g, books) {
+    const o = g.odds;
+    if (!o) return '<p class="muted">No odds yet.</p>';
+    const n = oddsNews(g);
+    const sl = spreadLines(g, o);
+    const opened = mv => mv ? `<span class="mv ${mv.shorter ? 'in' : 'out'}">${mv.shorter ? '▼' : '▲'} ${mv.from}</span>` : '<span class="muted-i">no change</span>';
+    const spreadCell = (line, p) => line == null ? '–'
+      : `<strong>${signedLine(line)}</strong>${p != null ? ` <span class="frac">at ${americanTo(p)?.decimal ?? '–'}</span>` : ''}`;
+
+    let rows = '';
+    if (sl) {
+      rows += `<div class="row"><span class="v">${spreadCell(sl.away, o.spreadAwayPrice)}</span><span class="lbl">Handicap (spread)${n?.openDetails ? `<br><small>opened ${esc(n.openDetails)}</small>` : ''}</span><span class="v">${spreadCell(sl.home, o.spreadHomePrice)}</span></div>`;
+    }
+    if (o.overUnder != null) {
+      rows += `<div class="row"><span class="v">Over <strong>${esc(o.overUnder)}</strong>${o.overPrice != null ? ` <span class="frac">at ${americanTo(o.overPrice)?.decimal}</span>` : ''}</span>
+        <span class="lbl">Total points${n?.openTotal != null ? `<br><small>opened ${esc(n.openTotal)}</small>` : ''}</span>
+        <span class="v">Under <strong>${esc(o.overUnder)}</strong>${o.underPrice != null ? ` <span class="frac">at ${americanTo(o.underPrice)?.decimal}</span>` : ''}</span></div>`;
+    }
+    if (n && (n.home || n.away)) {
+      rows += `<div class="row"><span class="v">${opened(n.away)}</span><span class="lbl">Opening win price</span><span class="v">${opened(n.home)}</span></div>`;
+    }
+
+    const list = (books || []).filter(b => b.home != null || b.away != null || b.details);
+    if (list.length > 1) {
+      const best = side => Math.max(...list.map(b => b[side]).filter(v => v != null).map(v => +americanTo(v).decimal));
+      const bA = best('away'), bH = best('home');
+      const cell = (v, b) => { const x = americanTo(v); return x ? `<span class="${+x.decimal === b ? 'best' : ''}">${x.decimal}</span>` : '–'; };
+      rows += `<div class="books"><p class="lbl">Prices by bookmaker</p>
+        <div class="table-wrap slim"><table>
+          <thead><tr><th scope="col" class="tcell">Bookmaker</th><th scope="col">${esc(g.away.abbr)}</th><th scope="col">${esc(g.home.abbr)}</th><th scope="col">Spread</th><th scope="col">Total</th></tr></thead>
+          <tbody>${list.map(b => `<tr><th scope="row" class="tcell">${esc(b.provider || 'Unknown')}</th>
+            <td>${cell(b.away, bA)}</td><td>${cell(b.home, bH)}</td><td>${esc(b.details || '–')}</td><td>${esc(b.overUnder ?? '–')}</td></tr>`).join('')}</tbody>
+        </table></div><p class="hint">Highlighted is the best price for each team.</p></div>`;
+    }
+    return (rows || '<p class="muted">Only match odds are available for this game.</p>') +
+      (o.provider ? `<p class="provider">Main odds from ${esc(o.provider)}</p>` : '');
+  }
+
+  // ---------- games today: estimate from past data ----------
+  const MODEL = {
+    nfl: { homeEdge: 1.5, marginSD: 13.5, totalSD: 13.5, games: 10 },
+    nba: { homeEdge: 2.5, marginSD: 12.5, totalSD: 18, games: 10 }
+  };
+  function normCdf(z) {
+    // Abramowitz & Stegun approximation
+    const t = 1 / (1 + 0.2316419 * Math.abs(z));
+    const d = 0.3989423 * Math.exp(-z * z / 2);
+    const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+    return z > 0 ? 1 - p : p;
+  }
+  const fairPrice = p => {
+    if (!p || p <= 0 || p >= 1) return null;
+    const dec = 1 / p;
+    return { decimal: dec.toFixed(2), fractional: ukFraction(dec - 1) };
+  };
+
+  function estimate(g, awayHist, homeHist) {
+    const m = MODEL[g.league];
+    const recent = h => h.slice(0, m.games);
+    const ah = recent(awayHist), hh = recent(homeHist);
+    if (ah.length < 3 || hh.length < 3) return null;
+    const avg = (arr, k) => arr.reduce((t, x) => t + x[k], 0) / arr.length;
+    const edge = g.neutral ? 0 : m.homeEdge;
+    const expHome = (avg(hh, 'us') + avg(ah, 'them')) / 2 + edge / 2;
+    const expAway = (avg(ah, 'us') + avg(hh, 'them')) / 2 - edge / 2;
+    const margin = expHome - expAway;
+    const pHome = normCdf(margin / m.marginSD);
+    const total = expHome + expAway;
+
+    const out = { expHome, expAway, pHome, pAway: 1 - pHome, games: Math.min(ah.length, hh.length) };
+    const sl = spreadLines(g, g.odds);
+    if (sl) {
+      // Home covers if home margin + home line > 0
+      out.pHomeCover = normCdf((margin + sl.home) / m.marginSD);
+      out.lines = sl;
+    }
+    if (g.odds?.overUnder != null) out.pOver = 1 - normCdf((toNum(g.odds.overUnder) - total) / m.totalSD);
+    return out;
+  }
+
+  // How often favourites priced like this one have won, from the Odds record history.
+  function similarFavourites(g) {
+    const a = americanTo(g.odds?.away), h = americanTo(g.odds?.home);
+    if (!a || !h || g.odds.home === g.odds.away) return null;
+    const p = Math.max(a.implied, h.implied) / (a.implied + h.implied);
+    const near = gradedGames(g.league).filter(x => x.g.prob != null && x.g.favWon != null && Math.abs(x.g.prob - p) <= 0.05);
+    if (near.length < 5) return null;
+    return { p, n: near.length, won: near.filter(x => x.g.favWon).length, fav: a.implied > h.implied ? g.away : g.home };
+  }
+
+  function estimateHTML(g, est, predictor) {
+    if (!est) {
+      return `<p class="muted">Not enough recent games to work out an estimate yet. It needs at least 3 finished games for each team.</p>`;
+    }
+    const pc = p => `${Math.round(p * 100)}%`;
+    const fa = fairPrice(est.pAway), fh = fairPrice(est.pHome);
+    const fp = x => x ? `${x.decimal} <span class="frac">${x.fractional}</span>` : '–';
+    const oddsPct = side => {
+      const a = americanTo(g.odds?.away), h = americanTo(g.odds?.home);
+      if (!a || !h) return '–';
+      const t = a.implied + h.implied;
+      return pc((side === 'a' ? a.implied : h.implied) / t);
+    };
+    let rows = `
+      <div class="row"><span class="v big">${pc(est.pAway)}</span><span class="lbl">Win chance, our estimate</span><span class="v big">${pc(est.pHome)}</span></div>
+      ${g.odds ? `<div class="row"><span class="v">${oddsPct('a')}</span><span class="lbl">Win chance, bookmakers</span><span class="v">${oddsPct('h')}</span></div>` : ''}
+      ${predictor ? `<div class="row"><span class="v">${pc(predictor.away)}</span><span class="lbl">Win chance, ESPN</span><span class="v">${pc(predictor.home)}</span></div>` : ''}
+      <div class="row"><span class="v">${fp(fa)}</span><span class="lbl">Fair price from our estimate</span><span class="v">${fp(fh)}</span></div>
+      <div class="row"><span class="v">${Math.round(est.expAway)}</span><span class="lbl">Expected points</span><span class="v">${Math.round(est.expHome)}</span></div>`;
+    if (est.pHomeCover != null) {
+      rows += `<div class="row"><span class="v">${pc(1 - est.pHomeCover)}</span><span class="lbl">Chance to cover ${esc(signedLine(est.lines.away))} / ${esc(signedLine(est.lines.home))}</span><span class="v">${pc(est.pHomeCover)}</span></div>`;
+    }
+    if (est.pOver != null) {
+      rows += `<div class="row full"><span class="lbl">Total points ${esc(g.odds.overUnder)}</span>
+        <span class="line">Over ${pc(est.pOver)}, under ${pc(1 - est.pOver)} <span class="muted-i">(expected ${Math.round(est.expHome + est.expAway)})</span></span></div>`;
+    }
+    const sim = similarFavourites(g);
+    if (sim) {
+      rows += `<div class="row full"><span class="lbl">From your Odds record</span>
+        <span class="line">Favourites priced like ${esc(sim.fav.short)} (${pc(sim.p)}) have won ${sim.won} of ${sim.n} (${pc(sim.won / sim.n)})</span></div>`;
+    }
+    return rows + `<p class="hint">Worked out from each team's last ${MODEL[g.league].games} games (points scored and allowed),
+      with a small home advantage. It's a simple guide, not a prediction, and doesn't know about injuries or rested players.</p>`;
+  }
+
+  // ---------- games today: form and head-to-head ----------
+  function formChips(f) {
+    if (!f) return '<span class="muted">No recent games</span>';
+    return `<span class="form">${f.games.map(x =>
+      `<span class="res r${x.result}" title="${esc(`${pastDate(x.date)}: ${x.home ? 'vs' : 'at'} ${x.oppName} ${x.us}–${x.them}`)}">${x.result}</span>`
+    ).join('')}</span>`;
+  }
+
+  function formHTML(g, awayHist, homeHist, ats) {
+    const af = formStats(awayHist), hf = formStats(homeHist);
+    const n = v => (v == null ? '–' : v.toFixed(1));
+    const signed = v => (v == null ? '–' : `${v > 0 ? '+' : ''}${v.toFixed(1)}`);
+    const ar = teamOddsRecord(g.league, g.away.id, g.seasonYear);
+    const hr = teamOddsRecord(g.league, g.home.id, g.seasonYear);
+    const rec = x => (x[0] + x[1] ? `${x[0]}–${x[1]}` : '–');
+    const anyOdds = [...ar.fav, ...ar.dog, ...hr.fav, ...hr.dog].some(Boolean);
+    return `
+      <div class="row"><span class="v">${esc(g.away.record || '–')}</span><span class="lbl">Season record</span><span class="v">${esc(g.home.record || '–')}</span></div>
+      ${g.away.awayRecord || g.home.homeRecord ? `<div class="row"><span class="v">${esc(g.away.awayRecord || '–')}</span><span class="lbl">Away / home record</span><span class="v">${esc(g.home.homeRecord || '–')}</span></div>` : ''}
+      <div class="row"><span class="v">${formChips(af)}</span><span class="lbl">Last ${FORM_GAMES} games</span><span class="v">${formChips(hf)}</span></div>
+      <div class="row"><span class="v">${n(af?.scored)}</span><span class="lbl">Points scored per game</span><span class="v">${n(hf?.scored)}</span></div>
+      <div class="row"><span class="v">${n(af?.conceded)}</span><span class="lbl">Points allowed per game</span><span class="v">${n(hf?.conceded)}</span></div>
+      <div class="row"><span class="v">${signed(af?.margin)}</span><span class="lbl">Average margin</span><span class="v">${signed(hf?.margin)}</span></div>
+      ${ats && (ats.away || ats.home) ? `<div class="row"><span class="v">${esc(ats.away || '–')}</span><span class="lbl">Record against the spread</span><span class="v">${esc(ats.home || '–')}</span></div>` : ''}
+      ${anyOdds ? `<div class="row"><span class="v">${rec(ar.fav)}</span><span class="lbl">Record as favourite</span><span class="v">${rec(hr.fav)}</span></div>
+        <div class="row"><span class="v">${rec(ar.dog)}</span><span class="lbl">Record as underdog</span><span class="v">${rec(hr.dog)}</span></div>` : ''}`;
+  }
+
+  function h2hHTML(g, awayHist) {
+    const meetings = awayHist.filter(x => x.oppId === String(g.home.id) && x.id !== g.id);
+    const seasons = LEAGUES[g.league].h2hSeasons;
+    if (!meetings.length) return `<p class="muted">No regular-season meetings in the last ${seasons} seasons.</p>`;
+    const aw = meetings.filter(x => x.result === 'W').length;
+    const hw = meetings.filter(x => x.result === 'L').length;
+    const avgA = meetings.reduce((t, x) => t + x.us, 0) / meetings.length;
+    const avgH = meetings.reduce((t, x) => t + x.them, 0) / meetings.length;
+    return `
+      <div class="row"><span class="v big">${aw}</span><span class="lbl">Wins, last ${seasons} seasons</span><span class="v big">${hw}</span></div>
+      <div class="row"><span class="v">${avgA.toFixed(1)}</span><span class="lbl">Average points</span><span class="v">${avgH.toFixed(1)}</span></div>
+      <ol class="meetings">${meetings.slice(0, H2H_SHOWN).map(x => `<li>
+        <span class="v ${x.result === 'W' ? 'won' : ''}">${x.us}</span>
+        <span class="lbl">${esc(pastDate(x.date))}, at ${esc(x.home ? g.away.abbr : g.home.abbr)}</span>
+        <span class="v ${x.result === 'L' ? 'won' : ''}">${x.them}</span>
+      </li>`).join('')}</ol>`;
+  }
+
+  // ---------- games today: card ----------
+  const openByDefault = () => window.matchMedia?.('(min-width: 761px)').matches ?? true;
+
+  function section(key, title, summary, open) {
+    return `<details class="sect" data-sect="${key}" ${open ? 'open' : ''}>
+      <summary><span class="st">${title}</span><span class="ss">${summary || ''}</span></summary>
+      <div class="sect-body"><div class="notice slim"><span class="spinner" aria-hidden="true"></span>Loading…</div></div>
+    </details>`;
   }
 
   function matchCardHTML(g) {
+    const open = openByDefault();
     return `<article class="match ${g.league}" data-key="${g.league}-${g.id}" title="Game ID ${esc(g.id)}">
       <header class="match-top">
         <div class="when"><span class="time">${esc(g.uk.time)}</span>${g.uk.hour < 7 ? '<span class="night">overnight</span>' : ''}</div>
@@ -687,105 +971,86 @@
 
       <div class="versus">
         <div class="side">
-          ${logoHTML(g.away, 44)}
+          ${logoHTML(g.away, 40)}
           <span class="sname">${esc(g.away.name)}</span>
           ${g.state !== 'pre' && g.away.score != null ? `<span class="big-score">${esc(g.away.score)}</span>` : ''}
         </div>
         <span class="at">at</span>
         <div class="side">
-          ${logoHTML(g.home, 44)}
+          ${logoHTML(g.home, 40)}
           <span class="sname">${esc(g.home.name)}</span>
           ${g.state !== 'pre' && g.home.score != null ? `<span class="big-score">${esc(g.home.score)}</span>` : ''}
         </div>
       </div>
 
       <div class="compare">
-        <div class="odds-slot">${oddsRows(g)}</div>
-        <div class="row"><span class="v">${esc(g.away.record || '–')}</span><span class="lbl">Season record</span><span class="v">${esc(g.home.record || '–')}</span></div>
-        ${g.away.awayRecord || g.home.homeRecord ? `<div class="row"><span class="v">${esc(g.away.awayRecord || '–')}</span><span class="lbl">Away / home record</span><span class="v">${esc(g.home.homeRecord || '–')}</span></div>` : ''}
-        <div class="history-slot"><div class="notice slim"><span class="spinner" aria-hidden="true"></span>Loading form and head-to-head…</div></div>
+        <div class="odds-slot">${oddsMainHTML(g)}</div>
+      </div>
+      <div class="sections">
+        ${section('est', 'Our estimate', 'from past results', open)}
+        ${section('more', 'More odds', 'handicap, totals, bookmakers', open)}
+        ${section('form', 'Form and stats', 'last 5 games', open)}
+        ${section('h2h', 'Head-to-head', 'recent meetings', false)}
       </div>
     </article>`;
   }
 
-  function formChips(f) {
-    if (!f) return '<span class="muted">No recent games</span>';
-    return `<span class="form">${f.games.map(x =>
-      `<span class="res r${x.result}" title="${esc(`${pastDate(x.date)}: ${x.home ? 'vs' : 'at'} ${x.oppName} ${x.us}–${x.them}`)}">${x.result}</span>`
-    ).join('')}</span>`;
-  }
-
-  function historyHTML(g, awayHist, homeHist) {
-    const af = formStats(awayHist), hf = formStats(homeHist);
-    const n = v => (v == null ? '–' : v.toFixed(1));
-    const signed = v => (v == null ? '–' : `${v > 0 ? '+' : ''}${v.toFixed(1)}`);
-
-    const formRows = `
-      <div class="row"><span class="v">${formChips(af)}</span><span class="lbl">Last ${FORM_GAMES} games</span><span class="v">${formChips(hf)}</span></div>
-      <div class="row"><span class="v">${af ? af.record : '–'}</span><span class="lbl">Record, last ${FORM_GAMES}</span><span class="v">${hf ? hf.record : '–'}</span></div>
-      <div class="row"><span class="v">${n(af?.scored)}</span><span class="lbl">Points scored per game</span><span class="v">${n(hf?.scored)}</span></div>
-      <div class="row"><span class="v">${n(af?.conceded)}</span><span class="lbl">Points allowed per game</span><span class="v">${n(hf?.conceded)}</span></div>
-      <div class="row"><span class="v">${signed(af?.margin)}</span><span class="lbl">Average margin</span><span class="v">${signed(hf?.margin)}</span></div>`;
-
-    // Head-to-head from the away team's point of view
-    const meetings = awayHist.filter(x => x.oppId === String(g.home.id) && x.id !== g.id);
-    const seasons = LEAGUES[g.league].h2hSeasons;
-    let h2h;
-    if (!meetings.length) {
-      h2h = `<p class="muted">These teams haven't met in the regular season in the last ${seasons} seasons.</p>`;
-    } else {
-      const aw = meetings.filter(x => x.result === 'W').length;
-      const hw = meetings.filter(x => x.result === 'L').length;
-      const avgA = meetings.reduce((t, x) => t + x.us, 0) / meetings.length;
-      const avgH = meetings.reduce((t, x) => t + x.them, 0) / meetings.length;
-      h2h = `
-        <div class="row"><span class="v big">${aw}</span><span class="lbl">Wins, last ${seasons} seasons</span><span class="v big">${hw}</span></div>
-        <div class="row"><span class="v">${avgA.toFixed(1)}</span><span class="lbl">Average points</span><span class="v">${avgH.toFixed(1)}</span></div>
-        <ol class="meetings">${meetings.slice(0, H2H_SHOWN).map(x => {
-          const venue = x.home ? `at ${g.away.abbr}` : `at ${g.home.abbr}`;
-          return `<li>
-            <span class="v ${x.result === 'W' ? 'won' : ''}">${x.us}</span>
-            <span class="lbl">${esc(pastDate(x.date))}, ${esc(venue)}</span>
-            <span class="v ${x.result === 'L' ? 'won' : ''}">${x.them}</span>
-          </li>`;
-        }).join('')}</ol>`;
-    }
-
-    const ar = teamOddsRecord(g.league, g.away.id, g.seasonYear);
-    const hr = teamOddsRecord(g.league, g.home.id, g.seasonYear);
-    const rec = x => (x[0] + x[1] ? `${x[0]}–${x[1]}` : '–');
-    const oddsRec = ar.fav[0] + ar.fav[1] + ar.dog[0] + ar.dog[1] + hr.fav[0] + hr.fav[1] + hr.dog[0] + hr.dog[1]
-      ? `<h3 class="sub">Against the odds this season</h3>
-        <div class="row"><span class="v">${rec(ar.fav)}</span><span class="lbl">Record as favourite</span><span class="v">${rec(hr.fav)}</span></div>
-        <div class="row"><span class="v">${rec(ar.dog)}</span><span class="lbl">Record as underdog</span><span class="v">${rec(hr.dog)}</span></div>`
-      : '';
-
-    return `<h3 class="sub">Recent form</h3>${formRows}${oddsRec}
-      <h3 class="sub">Head-to-head</h3>${h2h}`;
+  function fill(card, key, html) {
+    const body = card.querySelector(`[data-sect="${key}"] .sect-body`);
+    if (body) body.innerHTML = `<div class="compare">${html}</div>`;
   }
 
   async function loadMatchDetail(card, g) {
     const seasons = LEAGUES[g.league].h2hSeasons;
     const year = g.seasonYear || new Date().getFullYear();
 
-    // Odds fallback: the match summary carries a fuller odds list (pickcenter).
-    if (!g.odds) {
-      getJSON(`${SITE}/${LEAGUES[g.league].path}/summary?event=${g.id}`).then(sum => {
-        const o = parseOdds(sum.pickcenter?.[0] || sum.odds?.[0]);
-        if (o) { g.odds = o; card.querySelector('.odds-slot').innerHTML = oddsRows(g); }
-      }).catch(() => {});
-    }
+    // The match summary has every bookmaker's prices, ESPN's own prediction
+    // and records against the spread.
+    const summaryP = getJSON(`${SITE}/${LEAGUES[g.league].path}/summary?event=${g.id}`).catch(() => null);
+    const histP = Promise.all([
+      teamHistory(g.league, g.away.id, year, seasons),
+      teamHistory(g.league, g.home.id, year, 2)
+    ]).catch(() => null);
 
-    try {
-      const [awayHist, homeHist] = await Promise.all([
-        teamHistory(g.league, g.away.id, year, seasons),
-        // Form only needs the last couple of seasons for the home team
-        teamHistory(g.league, g.home.id, year, 2)
-      ]);
-      const notThis = h => h.filter(x => x.id !== g.id);
-      card.querySelector('.history-slot').innerHTML = historyHTML(g, notThis(awayHist), notThis(homeHist));
-    } catch {
-      card.querySelector('.history-slot').innerHTML = '<p class="muted">Form and head-to-head couldn’t load. Refresh to try again.</p>';
+    const sum = await summaryP;
+    const books = (sum?.pickcenter || []).map(parseOdds).filter(Boolean);
+    if (!g.odds && books.length) {
+      g.odds = books[0];
+      noteGame(g, g.odds);
+      card.querySelector('.odds-slot').innerHTML = oddsMainHTML(g);
+    }
+    // Fill in prices the scoreboard didn't include from the matching bookmaker.
+    if (g.odds && books.length) {
+      const same = books.find(b => b.provider === g.odds.provider) || books[0];
+      for (const k of ['spreadHome', 'spreadAway', 'spreadHomePrice', 'spreadAwayPrice', 'overPrice', 'underPrice', 'overUnder']) {
+        if (g.odds[k] == null && same[k] != null) g.odds[k] = same[k];
+      }
+    }
+    fill(card, 'more', oddsMoreHTML(g, books));
+
+    const proj = side => toNum(sum?.predictor?.[`${side}Team`]?.gameProjection);
+    const predictor = proj('home') != null && proj('away') != null ? { home: proj('home') / 100, away: proj('away') / 100 } : null;
+    const atsFor = id => {
+      const t = (sum?.againstTheSpread || []).find(x => String(x.team?.id) === String(id));
+      return t?.records?.[0]?.summary || '';
+    };
+    const ats = { away: atsFor(g.away.id), home: atsFor(g.home.id) };
+
+    const hist = await histP;
+    if (!hist) {
+      const msg = '<p class="muted">Past results couldn’t load. Refresh to try again.</p>';
+      fill(card, 'est', msg); fill(card, 'form', msg); fill(card, 'h2h', msg);
+      return;
+    }
+    const notThis = h => h.filter(x => x.id !== g.id);
+    const [awayHist, homeHist] = hist.map(notThis);
+    const est = estimate(g, awayHist, homeHist);
+    fill(card, 'est', estimateHTML(g, est, predictor));
+    fill(card, 'form', formHTML(g, awayHist, homeHist, ats));
+    fill(card, 'h2h', h2hHTML(g, awayHist));
+    if (est) {
+      const s = card.querySelector('[data-sect="est"] .ss');
+      if (s) s.textContent = `${g.away.abbr} ${Math.round(est.pAway * 100)}%, ${g.home.abbr} ${Math.round(est.pHome * 100)}%`;
     }
   }
 
@@ -1035,6 +1300,22 @@
       banner.hidden = false;
     }
   })();
+
+  // ---------- keep odds fresh ----------
+  // Bookmakers release and move lines all week, so re-check every 10 minutes
+  // while the app is open, and straight away when it's reopened.
+  const ODDS_REFRESH_MS = 10 * 60_000;
+  let lastRefresh = Date.now();
+  function refreshOdds() {
+    if (document.hidden || state.tab === 'standings') return;
+    lastRefresh = Date.now();
+    clearScoreboardCache();
+    renderCurrent();
+  }
+  setInterval(() => { if (Date.now() - lastRefresh >= ODDS_REFRESH_MS) refreshOdds(); }, 60_000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && Date.now() - lastRefresh > 5 * 60_000) refreshOdds();
+  });
 
   // ---------- start ----------
   renderMine();

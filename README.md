@@ -15,14 +15,16 @@ The **Schedule** tab shows the next 7 days of NFL and NBA games, grouped by UK d
 
 You can filter by league, show only games on UK TV, and step forward or back a week. Late US games are labelled "overnight".
 
-The **Games today** tab shows today's games (or the next day with games, if there are none today) as side-by-side match cards:
+The **Games today** tab shows today's games (or the next day with games, if there are none today) as side-by-side match cards. Each card shows the win chance from the odds and each team's price to win, with four sections you can open and close (open on a computer, closed on a phone):
 
-- odds to win for each team in decimal and fractional, the win chance they imply, the spread and the points total
-- season record, plus the away team's road record and the home team's home record
-- recent form: the last 5 results (hover a result for the score and opponent), points scored and allowed per game, and average margin
-- head-to-head: wins for each side over recent regular seasons (5 for NFL, 3 for NBA), average points, and the last few meetings with scores
+- **Our estimate**: a win chance worked out from each team's last 10 results (points scored and allowed, plus a small home advantage), shown next to the bookmakers' and ESPN's win chances. It also gives a fair price, expected points, the chance each side covers the handicap, the chance the game goes over or under the points total, and how often similarly priced favourites have won in your Odds record. It's a simple statistical guide and doesn't know about injuries.
+- **More odds**: the handicap (spread) and points total with their prices, opening prices, and prices from each bookmaker ESPN lists, with the best price for each team highlighted.
+- **Form and stats**: season and home/away records, last 5 results, points scored and allowed, record against the spread, and record as favourite and underdog.
+- **Head-to-head**: wins for each side over recent regular seasons (5 for NFL, 3 for NBA), average points, and the last few meetings.
 
-Form and head-to-head load as each card scrolls into view, so the page stays quick on busy NBA nights.
+Details load as each card scrolls into view, so the page stays quick on busy NBA nights. On phones, text and spacing are tighter so more fits on screen.
+
+**Upcoming odds** appear on every game in the Schedule tab as soon as bookmakers release them ("Odds not out yet" until then). Each team's decimal price is shown with the spread and points total. Once the price changes, you'll see where it opened, with ▼ when a price has shortened and ▲ when it has drifted. A "New odds" badge marks lines released in the last 12 hours, and "Odds moved" marks lines that changed in the last 24 hours. The Games today cards also show each team's opening price. The app re-checks odds every 10 minutes while it's open, and again whenever you reopen it.
 
 The **Odds record** tab tracks how often the odds got it right:
 
