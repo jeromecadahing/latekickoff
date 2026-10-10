@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Late Kick-off · NFL &amp; NBA on UK TV</title>
+  <meta name="description" content="NFL and NBA fixtures in UK time, the UK channels for each game, today's odds and form, plus live standings.">
+  <meta name="theme-color" content="#141B2D">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Late Kick-off">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="masthead">
+    <div class="masthead-inner">
+      <h1 class="brand">Late Kick&#8209;off</h1>
+      <p class="tagline">NFL and NBA in UK time, and where to watch them.</p>
+    </div>
+  </header>
+  <div class="tabs-bar">
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button role="tab" id="tab-schedule" aria-controls="panel-schedule" aria-selected="true">Schedule</button>
+      <button role="tab" id="tab-today" aria-controls="panel-today" aria-selected="false" tabindex="-1"><span class="tab-long">Games </span>today</button>
+      <button role="tab" id="tab-odds" aria-controls="panel-odds" aria-selected="false" tabindex="-1">Odds<span class="tab-long"> record</span></button>
+      <button role="tab" id="tab-standings" aria-controls="panel-standings" aria-selected="false" tabindex="-1">Standings</button>
+    </nav>
+  </div>
+
+  <div class="install" id="install" hidden>
+    <p id="install-text">Add Late Kick-off to your home screen to open it like an app.</p>
+    <button class="btn" id="install-btn" type="button" hidden>Install app</button>
+    <button class="install-close" id="install-close" type="button" aria-label="Dismiss">&times;</button>
+  </div>
+
+  <main>
+    <details class="mine" id="mine">
+      <summary>My channels: <span id="mine-summary"></span></summary>
+      <fieldset>
+        <legend>Tick the channels and services you have. They're highlighted on every game.</legend>
+        <div class="mine-list" id="mine-list"></div>
+      </fieldset>
+    </details>
+
+    <!-- SCHEDULE -->
+    <section id="panel-schedule" role="tabpanel" aria-labelledby="tab-schedule">
+      <div class="toolbar">
+        <div class="seg" role="group" aria-label="League">
+          <button data-league="all" aria-pressed="true">Both</button>
+          <button data-league="nfl" aria-pressed="false">NFL</button>
+          <button data-league="nba" aria-pressed="false">NBA</button>
+        </div>
+        <label class="toggle"><input type="checkbox" id="can-watch"><span>Only games I can watch</span></label>
+        <label class="toggle"><input type="checkbox" id="tv-only"><span>UK TV only</span></label>
+        <div class="week-nav">
+          <button id="prev-week" aria-label="Previous 7 days">&#8249;</button>
+          <button id="this-week" class="range" title="Jump to today"><span id="range-label">This week</span></button>
+          <button id="next-week" aria-label="Next 7 days">&#8250;</button>
+        </div>
+      </div>
+      <div id="schedule" aria-live="polite"></div>
+    </section>
+
+    <!-- GAMES TODAY -->
+    <section id="panel-today" role="tabpanel" aria-labelledby="tab-today" hidden>
+      <div class="toolbar">
+        <div class="seg" role="group" aria-label="League">
+          <button data-today="all" aria-pressed="true">Both</button>
+          <button data-today="nfl" aria-pressed="false">NFL</button>
+          <button data-today="nba" aria-pressed="false">NBA</button>
+        </div>
+      </div>
+      <div id="today" aria-live="polite"></div>
+      <p class="gamble">Odds are US bookmaker lines from ESPN, converted to decimal and fractional, and are for information only.
+        If you bet, you must be 18+. For free support, visit <a href="https://www.begambleaware.org" rel="noopener">BeGambleAware.org</a>.</p>
+    </section>
+
+    <!-- ODDS RECORD -->
+    <section id="panel-odds" role="tabpanel" aria-labelledby="tab-odds" hidden>
+      <div class="toolbar">
+        <div class="seg" role="group" aria-label="League">
+          <button data-odds="all" aria-pressed="true">Both</button>
+          <button data-odds="nfl" aria-pressed="false">NFL</button>
+          <button data-odds="nba" aria-pressed="false">NBA</button>
+        </div>
+      </div>
+      <div id="odds-record" aria-live="polite"></div>
+    </section>
+
+    <!-- STANDINGS -->
+    <section id="panel-standings" role="tabpanel" aria-labelledby="tab-standings" hidden>
+      <div class="toolbar">
+        <div class="seg" role="group" aria-label="League">
+          <button data-standings="nfl" aria-pressed="true">NFL</button>
+          <button data-standings="nba" aria-pressed="false">NBA</button>
+        </div>
+      </div>
+      <div id="standings" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>All times are UK time. Fixtures, scores, odds and standings come from ESPN's public data feed.
+      UK channels are worked out from broadcast rules in <code>channels.js</code>, so check your
+      TV guide for the final word, especially for chips marked with a question mark.</p>
+  </footer>
+
+  <script src="channels.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
