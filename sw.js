@@ -3,11 +3,11 @@
  * - Fetches live data from ESPN first, falling back to the last saved copy
  *   when there's no signal.
  * Bump VERSION whenever you change any app file, so phones pick up the update. */
-const VERSION = 'v7';
+const VERSION = 'v9';
 const APP_CACHE = `lko-app-${VERSION}`;
 const DATA_CACHE = 'lko-data';
 const APP_FILES = [
-  './', 'index.html', 'styles.css', 'app.js', 'channels.js', 'manifest.webmanifest',
+  './', 'index.html', 'styles.css', 'app.js', 'channels.js', 'qrcode.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/favicon-32.png'
 ];
 
