@@ -429,6 +429,25 @@ tbody .tcell { display: flex; align-items: center; gap: 0.55rem; }
 .table-wrap.slim th, .table-wrap.slim td { padding: 0.4rem 0.5rem; }
 .best { background: var(--mine-soft); color: var(--ink); font-weight: 700; padding: 0.05rem 0.3rem; border-radius: 0.25rem; }
 
+/* ---------- player news ---------- */
+.pgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; padding: 0.25rem 0 0.6rem; }
+.players { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.3rem; }
+.players li { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; font-size: 0.85rem; }
+.players .tip { text-align: left; }
+.pp { color: var(--ink-soft); font-size: 0.75rem; }
+.ps { color: var(--ink-soft); font-size: 0.75rem; }
+.padj { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.padj.neg { color: var(--loss); }
+.padj.pos { color: var(--win); }
+.padj.zero { color: var(--ink-soft); }
+.ptotal { margin: 0.4rem 0 0; font-size: 0.8rem; font-weight: 700; border-top: 1px dashed var(--rule); padding-top: 0.3rem; }
+.muted.small { font-size: 0.8rem; text-align: left; margin: 0; }
+.notice.inline { display: inline-flex; padding: 0; border: 0; background: none; font-size: 0.85rem; }
+@media (max-width: 760px) {
+  .pgrid { gap: 0.5rem; }
+  .players li { font-size: 0.75rem; }
+}
+
 /* ---------- descriptions ---------- */
 .tip {
   border: 0; background: none; padding: 0; margin: 0;

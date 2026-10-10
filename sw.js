@@ -3,7 +3,7 @@
  * - Fetches live data from ESPN first, falling back to the last saved copy
  *   when there's no signal.
  * Bump VERSION whenever you change any app file, so phones pick up the update. */
-const VERSION = 'v9';
+const VERSION = 'v10';
 const APP_CACHE = `lko-app-${VERSION}`;
 const DATA_CACHE = 'lko-data';
 const APP_FILES = [
@@ -29,6 +29,9 @@ self.addEventListener('fetch', e => {
   const url = new URL(req.url);
 
   // Live sports data: network first, saved copy if offline.
+  // Old box scores are only read once and boiled down by the app, so don't keep copies.
+  if (url.searchParams.has('lkobox')) return;
+
   if (url.hostname.endsWith('espn.com')) {
     e.respondWith(
       fetch(req)

@@ -439,7 +439,9 @@
       h: +est.pHome.toFixed(4),
       c: est.pHomeCover != null ? +est.pHomeCover.toFixed(4) : null,
       ov: est.pOver != null ? +est.pOver.toFixed(4) : null,
-      live: live ? 1 : 0
+      live: live ? 1 : 0,
+      mv: MODEL_VERSION,
+      pl: est.adj ? 1 : 0
     };
     persistHistory();
   }
@@ -475,7 +477,8 @@
   function backtestEstimates(onProgress = () => {}) {
     if (backtesting) return backtesting;
     backtesting = (async () => {
-      const todo = Object.values(hist).filter(r => r.o && r.hs != null && !r.est && r.yr);
+      const todo = Object.values(hist).filter(r => r.o && r.hs != null && r.yr &&
+        (!r.est || (!r.est.live && r.est.mv !== MODEL_VERSION)));
       if (!todo.length) return;
       onProgress(`Working out our estimate for ${todo.length} past ${todo.length === 1 ? 'game' : 'games'}…`);
       const histFor = new Map();
@@ -493,8 +496,11 @@
             home: { abbr: r.h.a, id: r.h.id }, away: { abbr: r.a.a, id: r.a.id },
             odds: { details: r.o.d, overUnder: r.o.ou, home: r.o.h, away: r.o.a }
           };
-          const est = estimate(pseudo, before(ah), before(hh));
-          if (est) saveEstimate(`${r.league}-${r.id}`, est, false);
+          pseudo.seasonYear = r.yr;
+          // maxYear: only use league tables from seasons already finished by then
+          const ctx = await loadContext(r.league, [r.yr], r.yr);
+          const est = estimate(pseudo, before(ah), before(hh), ctx, null);
+          if (est) { if (hist[`${r.league}-${r.id}`]?.est && !hist[`${r.league}-${r.id}`].est.live) delete hist[`${r.league}-${r.id}`].est; saveEstimate(`${r.league}-${r.id}`, est, false); }
         } catch { /* skip this game */ }
       }
     })().finally(() => { backtesting = null; });
@@ -543,7 +549,7 @@
           ${stat('Over/under picks', 'How often our over or under pick on the total points was right. Pushes are left out.', totRight, tot.length)}
         </dl>
       </div>
-      <p class="hint left">${live} of ${rows.length} estimates were saved before kick-off. The rest were worked out afterwards using only results from before each game.</p>
+      <p class="hint left">${live} of ${rows.length} estimates were saved before kick-off. The rest were worked out afterwards using only results from before each game, without player news.</p>
     </section>`;
   }
 
@@ -820,7 +826,7 @@
 
   async function teamSeason(league, teamId, year) {
     const url = `${SITE}/${LEAGUES[league].path}/teams/${teamId}/schedule?season=${year}&seasontype=2`;
-    try { return parseScheduleEvents(await getJSON(url), teamId); }
+    try { return parseScheduleEvents(await getJSON(url), teamId).map(x => ({ ...x, yr: year })); }
     catch { return []; }
   }
 
@@ -860,7 +866,8 @@
       'Prices by bookmaker': 'Win prices, handicap and total from each bookmaker ESPN lists. The highlighted price is the highest available for each team.'
     },
     est: {
-      'Win chance, our estimate': 'Worked out from each team’s last 10 results. It blends each team’s average points scored with the other team’s average points allowed, adds a small home advantage, then turns the expected margin into a chance of winning.',
+      'Win chance, our estimate': 'Worked out from each team’s last 10 results, with recent games counting more. Points are adjusted for how strong each opponent was, a small home advantage is added, injured or returning players are allowed for, and the expected margin is turned into a chance of winning.',
+      'Before player news': 'Our estimate before any changes for injured or returning players, so you can see how much the team news moves it.',
       'Win chance, bookmakers': 'The bookmakers’ win prices turned into a percentage, with their margin taken out.',
       'Win chance, ESPN': 'ESPN’s own prediction from its team-strength model (FPI for the NFL, BPI for the NBA). It also takes schedule strength into account.',
       'Fair price from our estimate': 'The decimal price that matches our estimate (1 ÷ chance). If the bookmakers’ price is higher, they rate the team’s chances lower than our estimate does. If it’s lower, they rate them higher.',
@@ -1041,9 +1048,11 @@
 
   // ---------- games today: estimate from past data ----------
   const MODEL = {
-    nfl: { homeEdge: 1.5, marginSD: 13.5, totalSD: 13.5, games: 10 },
-    nba: { homeEdge: 2.5, marginSD: 12.5, totalSD: 18, games: 10 }
+    // decay: how much less each older game counts (0.85 = each game back counts 15% less)
+    nfl: { homeEdge: 1.5, marginSD: 13.5, totalSD: 13.5, games: 10, decay: 0.85, adjCap: 10 },
+    nba: { homeEdge: 2.5, marginSD: 12.5, totalSD: 18, games: 10, decay: 0.85, adjCap: 12 }
   };
+  const MODEL_VERSION = 2;
   function normCdf(z) {
     // Abramowitz & Stegun approximation
     const t = 1 / (1 + 0.2316419 * Math.abs(z));
@@ -1056,29 +1065,283 @@
     const dec = 1 / p;
     return { decimal: dec.toFixed(2), fractional: ukFraction(dec - 1) };
   };
+  const avgOf = arr => (arr.length ? arr.reduce((t, v) => t + v, 0) / arr.length : 0);
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-  function estimate(g, awayHist, homeHist) {
-    const m = MODEL[g.league];
-    const recent = h => h.slice(0, m.games);
-    const ah = recent(awayHist), hh = recent(homeHist);
-    if (ah.length < 3 || hh.length < 3) return null;
-    const avg = (arr, k) => arr.reduce((t, x) => t + x[k], 0) / arr.length;
-    const edge = g.neutral ? 0 : m.homeEdge;
-    const expHome = (avg(hh, 'us') + avg(ah, 'them')) / 2 + edge / 2;
-    const expAway = (avg(ah, 'us') + avg(hh, 'them')) / 2 - edge / 2;
-    const margin = expHome - expAway;
-    const pHome = normCdf(margin / m.marginSD);
-    const total = expHome + expAway;
-
-    const out = { expHome, expAway, pHome, pAway: 1 - pHome, games: Math.min(ah.length, hh.length) };
-    const sl = spreadLines(g, g.odds);
-    if (sl) {
-      // Home covers if home margin + home line > 0
-      out.pHomeCover = normCdf((margin + sl.home) / m.marginSD);
-      out.lines = sl;
+  // ----- opponent strength: each team's season scoring from the standings -----
+  const ratingsCache = new Map();
+  function seasonRatings(league, year) {
+    const key = `${league}-${year}`;
+    if (!ratingsCache.has(key)) {
+      ratingsCache.set(key, (async () => {
+        const data = await getJSON(`${STANDINGS}/${LEAGUES[league].path}/standings?season=${year}`);
+        const teams = new Map();
+        let sumF = 0, sumA = 0, sumG = 0;
+        for (const grp of collectGroups(data)) {
+          for (const e of grp.entries) {
+            const id = String(e.team?.id ?? '');
+            if (!id || teams.has(id)) continue;
+            const v = n => findStat(e, [n])?.value;
+            const games = ((v('wins') || 0) + (v('losses') || 0) + (v('ties') || 0)) || v('gamesPlayed') || 0;
+            if (!games) continue;
+            let pf = v('avgPointsFor'), pa = v('avgPointsAgainst');
+            if (pf == null && v('pointsFor') != null) { pf = v('pointsFor') / games; pa = (v('pointsAgainst') || 0) / games; }
+            if (pf == null || pa == null) continue;
+            teams.set(id, { off: pf, def: pa, games });
+            sumF += pf * games; sumA += pa * games; sumG += games;
+          }
+        }
+        return { teams, lg: sumG ? (sumF + sumA) / (2 * sumG) : null };
+      })().catch(() => ({ teams: new Map(), lg: null })));
     }
-    if (g.odds?.overUnder != null) out.pOver = 1 - normCdf((toNum(g.odds.overUnder) - total) / m.totalSD);
+    return ratingsCache.get(key);
+  }
+
+  // ctx.maxYear: for a fair back-test, the current season's table isn't used
+  // (it includes later games), so the previous season stands in for it.
+  async function loadContext(league, years, maxYear) {
+    const ys = [...new Set(years.filter(Boolean).flatMap(y => [y, y - 1]))];
+    const list = await Promise.all(ys.map(y => seasonRatings(league, y)));
+    const byYear = new Map(ys.map((y, i) => [y, list[i]]));
+    return { byYear, maxYear };
+  }
+  function ratingFor(ctx, yr, teamId) {
+    if (!ctx || !yr) return null;
+    let y = yr;
+    if (ctx.maxYear && y >= ctx.maxYear) y = ctx.maxYear - 1;
+    for (const tryYear of [y, y - 1]) {
+      const r = ctx.byYear.get(tryYear);
+      const t = r?.teams.get(String(teamId));
+      if (t && r.lg && t.games >= 3) {
+        const k = t.games / (t.games + 4);          // trust early-season numbers less
+        return { off: r.lg + (t.off - r.lg) * k, def: r.lg + (t.def - r.lg) * k, lg: r.lg };
+      }
+    }
+    return null;
+  }
+  function leagueAvg(ctx, yr, fallback) {
+    let y = yr;
+    if (ctx?.maxYear && y >= ctx.maxYear) y = ctx.maxYear - 1;
+    return ctx?.byYear.get(y)?.lg ?? ctx?.byYear.get(y - 1)?.lg ?? fallback;
+  }
+
+  // A past game's points, adjusted for how good the opponent was and shown
+  // relative to that season's league average.
+  function adjustedGame(x, ctx, rawLg) {
+    const lg = leagueAvg(ctx, x.yr, rawLg);
+    const opp = ratingFor(ctx, x.yr, x.oppId);
+    const scored = opp ? x.us - (opp.def - opp.lg) : x.us;
+    const allowed = opp ? x.them - (opp.off - opp.lg) : x.them;
+    return { off: scored - lg, def: allowed - lg, margin: scored - allowed };
+  }
+
+  // Recency-weighted, opponent-adjusted scoring for one team.
+  function teamStrength(hist, league, ctx, rawLg) {
+    const m = MODEL[league];
+    const games = hist.slice(0, m.games);
+    let w = 0, off = 0, def = 0;
+    games.forEach((x, i) => {
+      const wt = Math.pow(m.decay, i);
+      const a = adjustedGame(x, ctx, rawLg);
+      off += wt * a.off; def += wt * a.def; w += wt;
+    });
+    const n = games.length;
+    const shrink = n / (n + 2);
+    return { off: (off / w) * shrink, def: (def / w) * shrink, n };
+  }
+
+  // adj: { home, away } margin changes from player news (points)
+  function estimate(g, awayHist, homeHist, ctx, adj) {
+    const m = MODEL[g.league];
+    if (Math.min(awayHist.length, homeHist.length, m.games) < 3) return null;
+    const recent = [...awayHist.slice(0, m.games), ...homeHist.slice(0, m.games)];
+    const rawLg = avgOf(recent.flatMap(x => [x.us, x.them]));
+    const lg = leagueAvg(ctx, g.seasonYear || recent[0]?.yr, rawLg) ?? rawLg;
+    const A = teamStrength(awayHist, g.league, ctx, rawLg);
+    const H = teamStrength(homeHist, g.league, ctx, rawLg);
+    const edge = g.neutral ? 0 : m.homeEdge;
+
+    const build = (dH, dA) => {
+      const expHome = lg + H.off + A.def + edge / 2 + dH / 2 - dA / 2;
+      const expAway = lg + A.off + H.def - edge / 2 + dA / 2 - dH / 2;
+      const margin = expHome - expAway;
+      const pHome = normCdf(margin / m.marginSD);
+      const out = { expHome, expAway, pHome, pAway: 1 - pHome };
+      const sl = spreadLines(g, g.odds);
+      if (sl) { out.pHomeCover = normCdf((margin + sl.home) / m.marginSD); out.lines = sl; }
+      if (g.odds?.overUnder != null) out.pOver = 1 - normCdf((toNum(g.odds.overUnder) - (expHome + expAway)) / m.totalSD);
+      return out;
+    };
+    const base = build(0, 0);
+    const final = adj ? build(adj.home || 0, adj.away || 0) : base;
+    return { ...final, base, games: Math.min(A.n, H.n), adj };
+  }
+
+  // ----- player availability: who played in each past game -----
+  const PLAYED_KEY = 'lko-played';
+  const PLAYER_SAMPLE = 12;
+  const playedStore = readStore(PLAYED_KEY, {});
+  let playedTimer = null;
+  function persistPlayed() {
+    clearTimeout(playedTimer);
+    playedTimer = setTimeout(() => {
+      const cutoff = Date.now() - HIST_MAX_DAYS * 864e5;
+      for (const k of Object.keys(playedStore)) if (playedStore[k].t < cutoff) delete playedStore[k];
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try { localStorage.setItem(PLAYED_KEY, JSON.stringify(playedStore)); return; }
+        catch {
+          // Storage full: drop the oldest half and try again
+          const keys = Object.keys(playedStore).sort((a, b) => playedStore[a].t - playedStore[b].t);
+          keys.slice(0, Math.ceil(keys.length / 2)).forEach(k => delete playedStore[k]);
+        }
+      }
+    }, 500);
+  }
+
+  // Box scores are large, so they're read once, boiled down to "who played"
+  // and kept on the device, rather than cached whole.
+  const playedPending = new Map();
+  function playedIn(league, eventId, gameTime) {
+    if (playedStore[eventId]) return Promise.resolve(playedStore[eventId]);
+    if (playedPending.has(eventId)) return playedPending.get(eventId);
+    const p = limited(async () => {
+      const res = await fetch(`${SITE}/${LEAGUES[league].path}/summary?event=${eventId}&lkobox=1`);
+      if (!res.ok) throw new Error('summary');
+      return res.json();
+    }).then(sum => {
+      const out = { t: gameTime || Date.now(), teams: {} };
+      for (const tp of sum.boxscore?.players || []) {
+        const tid = String(tp.team?.id ?? '');
+        if (!tid) continue;
+        const rec = out.teams[tid] = { ids: [], pts: {}, nm: {} };
+        for (const grp of tp.statistics || []) {
+          const labels = grp.labels || grp.keys || [];
+          const ptsIdx = league === 'nba' ? labels.findIndex(l => /^(pts|points)$/i.test(l)) : -1;
+          for (const a of grp.athletes || []) {
+            const id = String(a.athlete?.id ?? '');
+            if (!id || a.didNotPlay || !(a.stats || []).length) continue;
+            if (!rec.ids.includes(id)) rec.ids.push(id);
+            rec.nm[id] = [a.athlete.shortName || a.athlete.displayName || '', a.athlete.position?.abbreviation || ''];
+            if (ptsIdx >= 0) { const v = toNum(a.stats[ptsIdx]); if (v != null) rec.pts[id] = v; }
+          }
+        }
+      }
+      if (!Object.keys(out.teams).length) return null;
+      playedStore[eventId] = out;
+      persistPlayed();
+      return out;
+    }).catch(() => null).finally(() => playedPending.delete(eventId));
+    playedPending.set(eventId, p);
+    return p;
+  }
+
+  function parseInjuries(sum) {
+    const out = {};
+    for (const t of sum?.injuries || []) {
+      const tid = String(t.team?.id ?? '');
+      if (!tid) continue;
+      out[tid] = (t.injuries || []).map(i => ({
+        id: String(i.athlete?.id ?? ''),
+        name: i.athlete?.shortName || i.athlete?.displayName || 'Unknown player',
+        pos: i.athlete?.position?.abbreviation || '',
+        status: i.status || i.type?.description || i.details?.fantasyStatus?.description || 'Unknown'
+      })).filter(i => i.id);
+    }
     return out;
+  }
+
+  // How likely an injured player is to play, by report status.
+  function availability(league, status) {
+    const s = String(status).toLowerCase();
+    if (/out|reserve|suspend|ir\b/.test(s)) return 0;
+    if (/doubt/.test(s)) return 0.2;
+    if (/question/.test(s)) return league === 'nfl' ? 0.7 : 0.5;
+    if (/day-to-day|day to day|gtd/.test(s)) return 0.6;
+    if (/probable/.test(s)) return 0.9;
+    return 0.5;
+  }
+
+  // Typical value of a player when there isn't enough with/without data.
+  function typicalImpact(league, pos, ppg) {
+    if (league === 'nba') return clamp(0.35 * (ppg || 0), 0.3, 6);
+    const p = String(pos).toUpperCase();
+    if (p === 'QB') return 4;
+    if (['WR', 'TE', 'RB'].includes(p)) return 0.7;
+    if (['OT', 'T', 'G', 'OG', 'C', 'OL'].includes(p)) return 0.5;
+    if (p === 'K' || p === 'PK') return 0.4;
+    return 0.5;
+  }
+  const impactCap = (league, pos) => (league === 'nba' ? 7 : String(pos).toUpperCase() === 'QB' ? 7 : 3);
+  const SHRINK_GAMES = 3;
+
+  // Compare the team's (opponent-adjusted) results with and without each player.
+  async function playerNews(g, teamId, teamHist, injuries, ctx) {
+    const m = MODEL[g.league];
+    const sample = teamHist.slice(0, PLAYER_SAMPLE);
+    const boxes = await Promise.all(sample.map(x => playedIn(g.league, x.id, x.date.getTime())));
+    const rawLg = avgOf(sample.flatMap(x => [x.us, x.them]));
+    const games = sample
+      .map((x, i) => ({ x, i, box: boxes[i]?.teams?.[String(teamId)] }))
+      .filter(z => z.box);
+    if (games.length < 4) return { adj: 0, items: [], checked: games.length, enough: false };
+    games.forEach(z => { z.m = adjustedGame(z.x, ctx, rawLg).margin; });
+
+    const names = {};
+    games.forEach(z => Object.assign(names, z.box.nm));
+    const injById = new Map((injuries || []).map(i => [i.id, i]));
+
+    const evaluate = id => {
+      const W = games.filter(z => z.box.ids.includes(id));
+      const O = games.filter(z => !z.box.ids.includes(id));
+      if (W.length < 2) return null;
+      const pos = names[id]?.[1] || injById.get(id)?.pos || '';
+      const ppg = g.league === 'nba' ? avgOf(W.map(z => z.box.pts?.[id] ?? 0)) : null;
+      const typical = typicalImpact(g.league, pos, ppg);
+      let measured = null, impact = typical;
+      if (O.length >= 1) {
+        measured = avgOf(W.map(z => z.m)) - avgOf(O.map(z => z.m));
+        impact = (O.length * measured + SHRINK_GAMES * typical) / (O.length + SHRINK_GAMES);
+      }
+      impact = clamp(impact, 0, impactCap(g.league, pos));
+      // How much of the recent form (which the estimate is built on) had him playing
+      let ws = 0, wp = 0;
+      games.forEach(z => {
+        if (z.i >= m.games) return;
+        const wt = Math.pow(m.decay, z.i);
+        ws += wt; if (z.box.ids.includes(id)) wp += wt;
+      });
+      return {
+        id, pos, impact, measured, typical, ppg,
+        name: names[id]?.[0] || injById.get(id)?.name || 'Player',
+        nW: W.length, nO: O.length, share: ws ? wp / ws : 1
+      };
+    };
+
+    const items = [];
+    for (const inj of injuries || []) {
+      const ev = evaluate(inj.id);
+      const avail = availability(g.league, inj.status);
+      if (!ev) {
+        items.push({ name: inj.name, pos: inj.pos, status: inj.status, adj: 0, note: 'Not enough recent games to measure' });
+        continue;
+      }
+      const adj = ev.impact * (avail - ev.share);
+      items.push({ ...ev, name: inj.name || ev.name, status: inj.status, avail, adj });
+    }
+
+    // Regulars who missed some recent games and aren't on the injury report: add them back.
+    const regulars = [...new Set(games.flatMap(z => z.box.ids))].filter(id => !injById.has(id));
+    const back = regulars.map(evaluate).filter(ev =>
+      ev && ev.nW >= games.length * 0.5 && ev.share < 0.85 && ev.impact >= 0.5)
+      .map(ev => ({ ...ev, status: 'Available', avail: 1, adj: ev.impact * (1 - ev.share), back: true }))
+      .filter(ev => ev.adj >= 0.4)
+      .sort((a, b) => b.adj - a.adj)
+      .slice(0, 3);
+    items.push(...back);
+
+    const total = clamp(items.reduce((t, i) => t + (i.adj || 0), 0), -m.adjCap, m.adjCap);
+    items.sort((a, b) => Math.abs(b.adj || 0) - Math.abs(a.adj || 0));
+    return { adj: total, items, checked: games.length, enough: true };
   }
 
   // How often favourites priced like this one have won, from the Odds record history.
@@ -1091,7 +1354,44 @@
     return { p, n: near.length, won: near.filter(x => x.g.favWon).length, fav: a.implied > h.implied ? g.away : g.home };
   }
 
-  function estimateHTML(g, est, predictor) {
+  function playerItemHTML(it) {
+    const signed = v => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(1)}`;
+    const cls = it.adj > 0.05 ? 'pos' : it.adj < -0.05 ? 'neg' : 'zero';
+    let tip;
+    if (it.note) tip = `${it.note}, so no change is made for this player.`;
+    else {
+      const how = it.measured != null
+        ? `The team's margin was ${Math.abs(it.measured).toFixed(1)} pts ${it.measured >= 0 ? 'better' : 'worse'} with him (${it.nW} games with, ${it.nO} without), allowing for opponent strength. That's blended with a typical value for a ${it.pos || 'player'} because the sample is small, giving ${it.impact.toFixed(1)} pts.`
+        : `He hasn't missed a game in the sample, so a typical value for a ${it.pos || 'player'}${it.ppg ? ` scoring ${it.ppg.toFixed(1)} a game` : ''} is used: ${it.impact.toFixed(1)} pts.`;
+      const share = `He played in ${Math.round(it.share * 100)}% of the recent games the estimate is built on`;
+      const avail = it.back ? 'and is available now, so he’s added back.' :
+        `and is ${it.avail === 0 ? 'not expected to play' : `about ${Math.round(it.avail * 100)}% likely to play`} (${it.status}).`;
+      tip = `${how} ${share} ${avail}`;
+    }
+    const label = it.back ? 'back' : it.status;
+    return `<li>${tipBtn(`${esc(it.name)}${it.pos ? ` <span class="pp">${esc(it.pos)}</span>` : ''} <span class="ps">${esc(label)}</span>`, tip)}
+      <span class="padj ${cls}">${it.note ? '–' : signed(it.adj)}</span></li>`;
+  }
+
+  function playersHTML(g, news) {
+    if (news === 'pending') {
+      return `<div class="row full"><span class="lbl">Player news</span>
+        <span class="line"><span class="notice slim inline"><span class="spinner" aria-hidden="true"></span>Checking injuries and who played in recent games…</span></span></div>`;
+    }
+    if (!news) return '';
+    const side = (t, n) => {
+      if (!n.enough) return `<p class="muted small">Not enough box scores yet for ${esc(t.short)}.</p>`;
+      const shown = n.items.filter(i => i.note || Math.abs(i.adj) >= 0.1).slice(0, 6);
+      if (!shown.length) return `<p class="muted small">${esc(t.short)}: no changes.</p>`;
+      return `<ul class="players">${shown.map(playerItemHTML).join('')}</ul>
+        <p class="ptotal">${esc(t.short)} ${n.adj >= 0 ? '+' : '−'}${Math.abs(n.adj).toFixed(1)} pts</p>`;
+    };
+    return `<div class="row full"><span class="lbl">${tipBtn('Player news',
+      'Injured players are taken off, and regulars returning from a spell out are added back. Each player’s value comes from how the team did with and without him over its last 12 games.')}</span></div>
+      <div class="pgrid"><div>${side(g.away, news.away)}</div><div>${side(g.home, news.home)}</div></div>`;
+  }
+
+  function estimateHTML(g, est, predictor, news) {
     if (!est) {
       return `<p class="muted">Not enough recent games to work out an estimate yet. It needs at least 3 finished games for each team.</p>`;
     }
@@ -1104,8 +1404,11 @@
       const t = a.implied + h.implied;
       return pc((side === 'a' ? a.implied : h.implied) / t);
     };
+    const changed = est.adj && Math.round(est.base.pHome * 100) !== Math.round(est.pHome * 100);
     let rows = `
       <div class="row"><span class="v big">${pc(est.pAway)}</span><span class="lbl">Win chance, our estimate</span><span class="v big">${pc(est.pHome)}</span></div>
+      ${changed ? `<div class="row"><span class="v">${pc(est.base.pAway)}</span><span class="lbl">Before player news</span><span class="v">${pc(est.base.pHome)}</span></div>` : ''}
+      ${playersHTML(g, news)}
       ${g.odds ? `<div class="row"><span class="v">${oddsPct('a')}</span><span class="lbl">Win chance, bookmakers</span><span class="v">${oddsPct('h')}</span></div>` : ''}
       ${predictor ? `<div class="row"><span class="v">${pc(predictor.away)}</span><span class="lbl">Win chance, ESPN</span><span class="v">${pc(predictor.home)}</span></div>` : ''}
       <div class="row"><span class="v">${fp(fa)}</span><span class="lbl">Fair price from our estimate</span><span class="v">${fp(fh)}</span></div>
@@ -1122,8 +1425,9 @@
       rows += `<div class="row full"><span class="lbl">From your Odds record</span>
         <span class="line">Favourites priced like ${esc(sim.fav.short)} (${pc(sim.p)}) have won ${sim.won} of ${sim.n} (${pc(sim.won / sim.n)})</span></div>`;
     }
-    return rows + `<p class="hint">Worked out from each team's last ${MODEL[g.league].games} games (points scored and allowed),
-      with a small home advantage. It's a simple guide, not a prediction, and doesn't know about injuries or rested players.</p>`;
+    return rows + `<p class="hint">Built from each team's last ${MODEL[g.league].games} games, with recent games counting more,
+      points adjusted for how strong each opponent was, a small home advantage, and changes for injured or returning players.
+      It's a guide, not a prediction. It can't see late team news, weather or rested players.</p>`;
   }
 
   // ---------- games today: form and head-to-head ----------
@@ -1269,17 +1573,43 @@
       fill(card, 'est', msg); fill(card, 'form', msg); fill(card, 'h2h', msg);
       return;
     }
-    const notThis = h => h.filter(x => x.id !== g.id);
-    const [awayHist, homeHist] = hist.map(notThis);
-    const est = estimate(g, awayHist, homeHist);
-    if (est && g.state === 'pre') saveEstimate(`${g.league}-${g.id}`, est, true);
-    fill(card, 'est', estimateHTML(g, est, predictor));
+    const before = h => h.filter(x => x.id !== g.id && x.date < g.date);
+    const [awayHist, homeHist] = hist.map(before);
     fill(card, 'form', formHTML(g, awayHist, homeHist, ats));
     fill(card, 'h2h', h2hHTML(g, awayHist));
-    if (est) {
-      const s = card.querySelector('[data-sect="est"] .ss');
-      if (s) s.textContent = `${g.away.abbr} ${Math.round(est.pAway * 100)}%, ${g.home.abbr} ${Math.round(est.pHome * 100)}%`;
-    }
+
+    const years = [g.seasonYear, ...awayHist.slice(0, PLAYER_SAMPLE).map(x => x.yr), ...homeHist.slice(0, PLAYER_SAMPLE).map(x => x.yr)];
+    const ctx = await loadContext(g.league, years);
+    const key = `${g.league}-${g.id}`;
+    const showSummary = est => {
+      const el = card.querySelector('[data-sect="est"] .ss');
+      if (el && est) el.textContent = `${g.away.abbr} ${Math.round(est.pAway * 100)}%, ${g.home.abbr} ${Math.round(est.pHome * 100)}%`;
+    };
+
+    const base = estimate(g, awayHist, homeHist, ctx, null);
+    if (!base) { fill(card, 'est', estimateHTML(g, null, predictor)); return; }
+    if (g.state === 'pre') saveEstimate(key, base, true);
+    fill(card, 'est', estimateHTML(g, base, predictor, 'pending'));
+    showSummary(base);
+
+    // Player news needs a box score for each recent game, so it only runs once
+    // the "Our estimate" section is open.
+    const injuries = parseInjuries(sum);
+    const runPlayers = async () => {
+      const [away, home] = await Promise.all([
+        playerNews(g, g.away.id, awayHist, injuries[String(g.away.id)] || [], ctx),
+        playerNews(g, g.home.id, homeHist, injuries[String(g.home.id)] || [], ctx)
+      ]);
+      const est = estimate(g, awayHist, homeHist, ctx, { home: home.adj, away: away.adj });
+      if (g.state === 'pre') saveEstimate(key, est, true);
+      fill(card, 'est', estimateHTML(g, est, predictor, { away, home }));
+      showSummary(est);
+    };
+    const sect = card.querySelector('[data-sect="est"]');
+    if (sect.open) runPlayers().catch(() => fill(card, 'est', estimateHTML(g, base, predictor)));
+    else sect.addEventListener('toggle', () => {
+      if (sect.open) runPlayers().catch(() => fill(card, 'est', estimateHTML(g, base, predictor)));
+    }, { once: true });
   }
 
   async function renderToday() {
