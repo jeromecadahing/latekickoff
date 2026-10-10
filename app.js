@@ -557,10 +557,15 @@
   const oddsEl = document.getElementById('odds-record');
   const pct = (n, d) => (d ? Math.round((n / d) * 100) : 0);
   const BANDS = [
-    { name: 'Heavy favourites', from: 0.75, to: 1.01 },
-    { name: 'Clear favourites', from: 0.6, to: 0.75 },
-    { name: 'Slight favourites', from: 0, to: 0.6 }
+    { name: 'Heavy favourites', from: 0.75, to: 1.01,
+      tip: 'Teams the bookmakers gave a 75% or higher chance of winning, roughly a price of 1.33 or shorter. Big mismatches.' },
+    { name: 'Clear favourites', from: 0.6, to: 0.75,
+      tip: 'Teams the bookmakers gave a 60% to 75% chance of winning, roughly a price between 1.33 and 1.67.' },
+    { name: 'Slight favourites', from: 0, to: 0.6,
+      tip: 'Teams the bookmakers gave less than a 60% chance of winning, roughly a price of 1.67 or longer. Close games.' }
   ];
+  const ODDS_SAID_TIP = 'The average chance of winning the bookmakers gave these teams. A price turns into a chance as roughly 1 ÷ price (1.25 is about 80%, 1.50 about 67%, 1.80 about 56%), with the bookmakers’ margin taken out so both teams add up to 100%.';
+  const ACTUAL_TIP = 'How often these teams really won. If the odds are accurate, this should be close to the “Odds said” figure.';
 
   function renderOddsRecord(progress) {
     const league = state.oddsLeague;
@@ -584,12 +589,13 @@
     const headline = `<div class="hit-rate">
       <div class="hit-main">
         <span class="hit-num">${pct(favWins, decided.length)}%</span>
-        <span class="hit-lbl">of favourites won (${favWins} of ${decided.length} games)</span>
+        <span class="hit-lbl">${tipBtn(`of favourites won (${favWins} of ${decided.length} games)`,
+          'The favourite is the team with the shorter (lower) price. This is how often that team won. Ties are left out.')}</span>
       </div>
       <dl class="hit-side">
-        ${spread.length ? `<div><dt>Favourite covered the spread</dt><dd>${pct(covers, spread.length)}% <small>${covers} of ${spread.length}</small></dd></div>` : ''}
-        ${totals.length ? `<div><dt>Went over the points total</dt><dd>${pct(overs, totals.length)}% <small>${overs} of ${totals.length}</small></dd></div>` : ''}
-        <div><dt>Upsets</dt><dd>${decided.length - favWins} <small>underdog wins</small></dd></div>
+        ${spread.length ? `<div><dt>${tipBtn('Favourite covered the spread', 'How often the favourite won by more than the bookmakers’ handicap, for example by 4 or more when the line was −3.5. Games that landed exactly on the line, or had no handicap listed, are left out.')}</dt><dd>${pct(covers, spread.length)}% <small>${covers} of ${spread.length}</small></dd></div>` : ''}
+        ${totals.length ? `<div><dt>${tipBtn('Went over the points total', 'How often both teams’ scores added together beat the bookmakers’ points total. Around 50% means the totals have been well set.')}</dt><dd>${pct(overs, totals.length)}% <small>${overs} of ${totals.length}</small></dd></div>` : ''}
+        <div><dt>${tipBtn('Upsets', 'Games the underdog (the team with the longer price) won.')}</dt><dd>${decided.length - favWins} <small>underdog wins</small></dd></div>
       </dl>
     </div>`;
 
@@ -601,13 +607,16 @@
       const actual = pct(inBand.filter(x => x.g.favWon).length, inBand.length);
       const diff = actual - expected;
       const verdict = Math.abs(diff) <= 5 ? 'About right' : diff > 0 ? `Won more often than the odds said (+${diff}%)` : `Won less often than the odds said (−${-diff}%)`;
+      const verdictTip = Math.abs(diff) <= 5
+        ? `These teams won within 5% of what the odds said, so the bookmakers’ prices have been about right.`
+        : `Across ${inBand.length} ${inBand.length === 1 ? 'game' : 'games'}, the odds said these teams would win about ${Math.round(expected / 100 * inBand.length)}, and they actually won ${inBand.filter(x => x.g.favWon).length}. ${inBand.length < 20 ? 'That’s a small sample, so a couple of surprise results can make a big difference.' : ''}`;
       return `<div class="band">
-        <div class="band-head"><strong>${b.name}</strong><span>${inBand.length} ${inBand.length === 1 ? 'game' : 'games'}</span></div>
+        <div class="band-head"><strong>${tipBtn(b.name, b.tip)}</strong><span>${inBand.length} ${inBand.length === 1 ? 'game' : 'games'}</span></div>
         <div class="band-bars">
-          <span class="bl">Odds said</span><span class="track"><span class="fill exp" style="width:${expected}%"></span></span><span class="bv">${expected}%</span>
-          <span class="bl">Actually won</span><span class="track"><span class="fill act" style="width:${actual}%"></span></span><span class="bv">${actual}%</span>
+          <span class="bl">${tipBtn('Odds said', ODDS_SAID_TIP)}</span><span class="track"><span class="fill exp" style="width:${expected}%"></span></span><span class="bv">${expected}%</span>
+          <span class="bl">${tipBtn('Actually won', ACTUAL_TIP)}</span><span class="track"><span class="fill act" style="width:${actual}%"></span></span><span class="bv">${actual}%</span>
         </div>
-        <p class="verdict">${verdict}</p>
+        <p class="verdict">${tipBtn(verdict, verdictTip)}</p>
       </div>`;
     }).join('');
 
