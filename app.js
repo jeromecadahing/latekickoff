@@ -28,9 +28,13 @@
     standingsLeague: prefs.standingsLeague || 'nfl',
     oddsLeague: prefs.oddsLeague || 'all',
     start: todayLondon(),
-    refreshTimer: null
+    refreshTimer: null,
+    weeksAll: false,
+    teamsAll: false,
+    teamSort: { key: 'beat', dir: -1 }
   };
   const cache = new Map();
+  const gameIndex = new Map();   // every game parsed this session, for the game pop-up
 
   // ---------- helpers ----------
   function loadPrefs() {
@@ -197,11 +201,12 @@
       neutral: !!comp.neutralSite,
       notes: (comp.notes || []).map(n => n.headline).filter(Boolean),
       odds: parseOdds(comp.odds?.[0]),
+      week: ev.week?.number ?? null,
       usTv
     };
     game.channels = window.UKTV.channelsFor(game);
     game.onUkTv = game.channels.some(c => c.kind === 'tv');
-    if (!skipHistory) noteGame(game);
+    if (!skipHistory) { noteGame(game); gameIndex.set(`${league}-${game.id}`, game); }
     return game;
   }
 
@@ -273,6 +278,7 @@
         a: { id: String(g.away.id), a: g.away.abbr, n: g.away.short }
       };
     }
+    if (g.league === 'nfl' && g.seasonType === 2 && g.week && r.wk == null) r.wk = g.week;
     if (!r.h.f && g.home.name) { r.h.f = g.home.name; r.h.l = g.home.logo || ''; }
     if (!r.a.f && g.away.name) { r.a.f = g.away.name; r.a.l = g.away.logo || ''; }
     if (odds && (g.state === 'pre' || !r.o || oddsOverride)) {
@@ -409,7 +415,7 @@
           if (doneChunks.has(chunk)) continue;
           onProgress(`Checking NFL week ${w}…`);
           const d = await getJSON(`${SITE}/football/nfl/scoreboard?seasontype=2&week=${w}&dates=${year}`);
-          (d.events || []).forEach(ev => parseEvent(ev, 'nfl'));
+          (d.events || []).forEach(ev => { if (!ev.week) ev.week = { number: w }; parseEvent(ev, 'nfl'); });
           await fillMissingOdds(d.events, 'nfl');
           if (w < week || type !== 2) if (allFinal(d.events)) doneChunks.add(chunk);
         }
@@ -588,6 +594,236 @@
       <div hidden id="${id}"><p class="gl-title">${esc(title)}: favourite, price and result</p><ul class="glist">${rows}</ul></div>`;
   }
 
+  // ---------- odds record: week by week ----------
+  // Weeks run Tuesday to Monday (UK), so an NFL week from Thursday night to
+  // Monday night stays together.
+  const WEEKDAY_IDX = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
+  const WEEKS_SHOWN = 8;
+  const WEEKS_CHARTED = 16;
+  function weekOf(t) {
+    const p = londonParts(new Date(t));
+    return addDays(p.ymd, -((WEEKDAY_IDX[p.weekday] - 2 + 7) % 7));
+  }
+
+  function weeklyRows(games) {
+    const byWeek = new Map();
+    for (const x of games) {
+      const k = weekOf(x.r.t);
+      if (!byWeek.has(k)) byWeek.set(k, []);
+      byWeek.get(k).push(x);
+    }
+    const thisWeek = weekOf(Date.now());
+    return [...byWeek.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1)).map(([start, list]) => {
+      const decided = list.filter(x => x.g.favWon != null);
+      const withP = decided.filter(x => x.g.prob != null);
+      const spread = list.filter(x => x.g.cover && x.g.cover !== 'push');
+      const totals = list.filter(x => x.g.total && x.g.total !== 'push');
+      const ests = list.map(x => gradeEstimate(x.r, x.g)).filter(e => e && e.won != null);
+      const nflWeeks = new Set(list.map(x => (x.r.league === 'nfl' && x.r.st === 2 ? x.r.wk ?? null : null)));
+      return {
+        start, list, current: start === thisWeek,
+        decided: decided.length, favWon: decided.filter(x => x.g.favWon).length,
+        said: withP.length ? withP.reduce((t, x) => t + x.g.prob, 0) / withP.length : null,
+        spread: spread.length, covered: spread.filter(x => x.g.cover === 'yes').length,
+        totals: totals.length, overs: totals.filter(x => x.g.total === 'over').length,
+        ests: ests.length, estRight: ests.filter(e => e.won).length,
+        nflWeek: nflWeeks.size === 1 ? [...nflWeeks][0] : null
+      };
+    });
+  }
+
+  const weekLabel = w => {
+    const end = addDays(w.start, 6);
+    return w.start.slice(5, 7) === end.slice(5, 7)
+      ? `${fmtUTC(w.start, { day: 'numeric' })}–${shortDate(end)}` : `${shortDate(w.start)} – ${shortDate(end)}`;
+  };
+
+  function weeklyChartHTML(weeks) {
+    const pts = weeks.filter(w => w.decided).slice(0, WEEKS_CHARTED).reverse();
+    if (pts.length < 2) return '';
+    const narrow = window.innerWidth < 600;
+    const W = narrow ? 360 : 640, H = narrow ? 200 : 180, pad = { l: 42, r: 8, t: 10, b: 22 };
+    const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+    const slot = iw / pts.length, bw = Math.max(6, Math.min(30, slot * 0.62));
+    const y = v => pad.t + (1 - v) * ih;
+    const cx = i => pad.l + i * slot + slot / 2;
+    const grid = [0.25, 0.5, 0.75, 1].map(c => `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(c)}" y2="${y(c)}" class="${c === 0.5 ? 'g50' : 'g'}"/>
+      <text x="${pad.l - 6}" y="${y(c) + 4}" text-anchor="end">${c * 100}%</text>`).join('');
+    const bars = pts.map((w, i) => {
+      const v = w.favWon / w.decided;
+      const tip = `${weekLabel(w)}: favourites won ${w.favWon} of ${w.decided} (${Math.round(v * 100)}%)` +
+        (w.said != null ? `, odds said ${Math.round(w.said * 100)}%` : '') +
+        (w.ests ? `, our picks right ${w.estRight} of ${w.ests}` : '');
+      return `<g><title>${esc(tip)}</title>
+        <rect x="${(cx(i) - bw / 2).toFixed(1)}" y="${y(v).toFixed(1)}" width="${bw.toFixed(1)}" height="${(ih * v).toFixed(1)}" rx="2" class="wb${w.current ? ' cur' : ''}"/>
+        ${w.said != null ? `<line x1="${(cx(i) - bw / 2 - 3).toFixed(1)}" x2="${(cx(i) + bw / 2 + 3).toFixed(1)}" y1="${y(w.said).toFixed(1)}" y2="${y(w.said).toFixed(1)}" class="wx"/>` : ''}
+        ${w.ests ? `<circle cx="${cx(i).toFixed(1)}" cy="${y(w.estRight / w.ests).toFixed(1)}" r="4" class="we"/>` : ''}
+      </g>`;
+    }).join('');
+    return `<figure class="tchart wchart">
+      <figcaption>${tipBtn('How often favourites won, week by week', 'Each bar is one week (Tuesday to Monday), oldest on the left. Its height is how often the favourite won. The yellow line is how often the odds said they would. The hollow dot is how often our estimate picked the winner. Hover over or tap a bar for the numbers.')}</figcaption>
+      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Bar chart of how often favourites won each week">
+        ${grid}${bars}
+        <text x="${pad.l}" y="${H - 4}">${esc(shortDate(pts[0].start))}</text>
+        <text x="${W - pad.r}" y="${H - 4}" text-anchor="end">${esc(shortDate(pts[pts.length - 1].start))}</text>
+      </svg>
+      <p class="legend"><span class="lg wb"></span>Favourites won <span class="lg wx"></span>Odds said <span class="lg we"></span>Our picks right</p>
+    </figure>`;
+  }
+
+  function weeklyHTML(games) {
+    const weeks = weeklyRows(games);
+    if (!weeks.length) return '';
+    const shown = state.weeksAll ? weeks : weeks.slice(0, WEEKS_SHOWN);
+    const cell = (n, d, sub) => (d ? `${pct(n, d)}%<small>${sub ?? `${n} of ${d}`}</small>` : '–');
+    const rows = shown.map(w => {
+      const diff = w.said != null && w.decided ? Math.round((w.favWon / w.decided - w.said) * 100) : null;
+      const label = w.nflWeek ? `NFL week ${w.nflWeek}` : weekLabel(w);
+      return `<tr${w.current ? ' class="cur"' : ''}>
+        <th scope="row" class="tcell"><span class="wk">${esc(label)}</span>${w.nflWeek || w.current ? `<small>${w.nflWeek ? esc(weekLabel(w)) : ''}${w.nflWeek && w.current ? ', ' : ''}${w.current ? 'so far' : ''}</small>` : ''}</th>
+        <td>${w.list.length}</td>
+        <td>${cell(w.favWon, w.decided)}</td>
+        <td>${w.said != null ? `${Math.round(w.said * 100)}%${diff != null ? `<small class="${diff > 5 ? 'up' : diff < -5 ? 'down' : ''}">${diff > 0 ? '+' : diff < 0 ? '−' : '±'}${Math.abs(diff)}%</small>` : ''}` : '–'}</td>
+        <td>${w.decided - w.favWon}</td>
+        <td>${cell(w.covered, w.spread)}</td>
+        <td>${cell(w.overs, w.totals)}</td>
+        <td>${cell(w.estRight, w.ests)}</td>
+      </tr>`;
+    }).join('');
+    return `<section class="weekly">
+      <h2 class="day-head">Week by week <span class="count">${weeks.length} ${weeks.length === 1 ? 'week' : 'weeks'}</span></h2>
+      ${weeklyChartHTML(weeks)}
+      <div class="table-wrap"><table class="rtable">
+        <thead><tr>
+          <th scope="col" class="tcell">Week</th>
+          <th scope="col">Games</th>
+          <th scope="col"><abbr title="How often the favourite won">Favourites won</abbr></th>
+          <th scope="col"><abbr title="The average win chance the odds gave the favourites. The small figure shows whether they won more (+) or less (−) often than that.">Odds said</abbr></th>
+          <th scope="col"><abbr title="Games the underdog won">Upsets</abbr></th>
+          <th scope="col"><abbr title="How often the favourite covered the handicap">Handicap</abbr></th>
+          <th scope="col"><abbr title="How often games went over the points total">Overs</abbr></th>
+          <th scope="col"><abbr title="How often our estimate picked the winner">Our picks</abbr></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      ${weeks.length > WEEKS_SHOWN ? `<p class="more-row"><button type="button" class="btn btn-ghost btn-small" data-act="weeks-all">${state.weeksAll ? `Show the last ${WEEKS_SHOWN} weeks` : `Show all ${weeks.length} weeks`}</button></p>` : ''}
+    </section>`;
+  }
+
+  // ---------- odds record: team by team ----------
+  const TEAMS_SHOWN = 12;
+  function teamSuccessRows(games) {
+    const teams = new Map();
+    const get = (league, t) => {
+      const k = `${league}-${t.id}`;
+      if (!teams.has(k)) {
+        teams.set(k, { league, id: t.id, name: t.f || t.n, short: t.n || t.a, abbr: t.a || '', logo: t.l || '',
+          w: 0, l: 0, expSum: 0, expN: 0, wonP: 0, fw: 0, fl: 0, dw: 0, dl: 0, cy: 0, cn: 0, ov: 0, un: 0, n: 0 });
+      }
+      const s = teams.get(k);
+      if (t.f) s.name = t.f;
+      if (!s.logo && t.l) s.logo = t.l;
+      return s;
+    };
+    for (const { r, g } of games) {
+      for (const side of ['h', 'a']) {
+        const s = get(r.league, r[side]);
+        const my = side === 'h' ? r.hs : r.as, their = side === 'h' ? r.as : r.hs;
+        const won = my > their ? true : my < their ? false : null;
+        const isFav = side === g.fav;
+        s.n++;
+        if (won != null) {
+          won ? s.w++ : s.l++;
+          if (isFav) won ? s.fw++ : s.fl++; else won ? s.dw++ : s.dl++;
+          if (g.prob != null) { s.expSum += isFav ? g.prob : 1 - g.prob; s.expN++; if (won) s.wonP++; }
+        }
+        if (g.cover && g.cover !== 'push') (isFav === (g.cover === 'yes')) ? s.cy++ : s.cn++;
+        if (g.total === 'over') s.ov++; else if (g.total === 'under') s.un++;
+      }
+    }
+    const rate = (a, b) => (a + b ? a / (a + b) : null);
+    return [...teams.values()].map(s => ({
+      ...s,
+      winPct: rate(s.w, s.l),
+      beat: s.expN ? s.wonP - s.expSum : null,
+      favPct: rate(s.fw, s.fl),
+      dogPct: rate(s.dw, s.dl),
+      covPct: rate(s.cy, s.cn),
+      ovPct: rate(s.ov, s.un)
+    }));
+  }
+
+  const TEAM_COLS = [
+    { key: 'name', label: 'Team', title: 'Sort by team name' },
+    { key: 'n', label: 'Games', title: 'Finished games saved with odds' },
+    { key: 'winPct', label: 'Won', title: 'How often the team won' },
+    { key: 'beat', label: 'Beat the odds', title: 'Wins above (or below) what the odds expected, adding up the team’s win chance in each game' },
+    { key: 'favPct', label: 'As favourite', title: 'Record when the bookmakers made the team the favourite' },
+    { key: 'dogPct', label: 'As underdog', title: 'Record when the team was the underdog. Wins here are upsets' },
+    { key: 'covPct', label: 'Handicap', title: 'How often the team landed the handicap (spread), favourite or underdog' },
+    { key: 'ovPct', label: 'Overs', title: 'How often the team’s games went over the points total' }
+  ];
+
+  function teamSuccessHTML(games, league) {
+    const rows = teamSuccessRows(games);
+    if (!rows.length) return '';
+    const { key, dir } = state.teamSort;
+    rows.sort((a, b) => {
+      if (key === 'name') return dir * a.name.localeCompare(b.name);
+      const av = a[key], bv = b[key];
+      if (av == null && bv == null) return a.name.localeCompare(b.name);
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      return dir * (av - bv) || b.n - a.n;
+    });
+    const shown = state.teamsAll ? rows : rows.slice(0, TEAMS_SHOWN);
+    const p = v => (v == null ? '–' : `${Math.round(v * 100)}%`);
+    const wl = (w, l) => `${w}–${l}`;
+    const head = TEAM_COLS.map(c => {
+      const on = c.key === key;
+      const sortAttr = on ? ` aria-sort="${dir > 0 ? 'ascending' : 'descending'}"` : '';
+      return `<th scope="col"${c.key === 'name' ? ' class="tcell"' : ''}${sortAttr}><button type="button" class="sort${on ? ' on' : ''}" data-sort="${c.key}" title="${esc(c.title)}">${esc(c.label)}</button></th>`;
+    }).join('');
+    const body = shown.map(s => `<tr>
+      <th scope="row" class="tcell"><span class="tc-in">${logoHTML({ logo: s.logo, abbr: s.abbr || s.short || '' }, 22)}
+        ${teamLink(s.league, s.id, `<span class="full">${esc(s.name)}</span><span class="abbr">${esc(s.short)}</span>`)}
+        ${league === 'all' ? `<span class="league-tag ${s.league}">${LEAGUES[s.league].label}</span>` : ''}</span></th>
+      <td>${s.n}</td>
+      <td>${p(s.winPct)}<small>${wl(s.w, s.l)}</small></td>
+      <td>${s.beat == null ? '–' : `<span class="${s.beat >= 0.5 ? 'ok' : s.beat <= -0.5 ? 'no' : ''}">${s.beat > 0 ? '+' : s.beat < 0 ? '−' : ''}${Math.abs(s.beat).toFixed(1)}</span><small>won ${s.wonP}, odds said ${s.expSum.toFixed(1)}</small>`}</td>
+      <td>${s.fw + s.fl ? `${wl(s.fw, s.fl)}<small>${p(s.favPct)}</small>` : '–'}</td>
+      <td>${s.dw + s.dl ? `${wl(s.dw, s.dl)}<small>${p(s.dogPct)}</small>` : '–'}</td>
+      <td>${p(s.covPct)}${s.cy + s.cn ? `<small>${wl(s.cy, s.cn)}</small>` : ''}</td>
+      <td>${p(s.ovPct)}${s.ov + s.un ? `<small>${s.ov} over, ${s.un} under</small>` : ''}</td>
+    </tr>`).join('');
+    return `<section class="teams-rate">
+      <h2 class="day-head">Team by team <span class="count">${rows.length} teams</span></h2>
+      <p class="intro">“Beat the odds” is how many more games a team won than its prices suggested. Tap a column heading to sort, or a team for its full odds history.</p>
+      <div class="table-wrap"><table class="rtable stable">
+        <thead><tr>${head}</tr></thead>
+        <tbody>${body}</tbody>
+      </table></div>
+      ${rows.length > TEAMS_SHOWN ? `<p class="more-row"><button type="button" class="btn btn-ghost btn-small" data-act="teams-all">${state.teamsAll ? `Show the top ${TEAMS_SHOWN}` : `Show all ${rows.length} teams`}</button></p>` : ''}
+    </section>`;
+  }
+
+  oddsEl.addEventListener('click', e => {
+    const s = e.target.closest('[data-sort]');
+    if (s) {
+      const k = s.dataset.sort;
+      state.teamSort = state.teamSort.key === k ? { key: k, dir: -state.teamSort.dir } : { key: k, dir: k === 'name' ? 1 : -1 };
+      renderOddsRecord();
+      oddsEl.querySelector(`[data-sort="${k}"]`)?.focus();
+      return;
+    }
+    const a = e.target.closest('[data-act]');
+    if (!a) return;
+    if (a.dataset.act === 'weeks-all') state.weeksAll = !state.weeksAll;
+    if (a.dataset.act === 'teams-all') state.teamsAll = !state.teamsAll;
+    renderOddsRecord();
+    oddsEl.querySelector(`[data-act="${a.dataset.act}"]`)?.focus();
+  });
+
   function renderOddsRecord(progress) {
     const league = state.oddsLeague;
     const games = gradedGames(league);
@@ -661,6 +897,8 @@
     }).join('');
 
     oddsEl.innerHTML = `${progressHTML}${headline}
+      ${weeklyHTML(games)}
+      ${teamSuccessHTML(games, league)}
       ${ourEstimateHTML(games)}
       ${bandRows ? `<h2 class="day-head">How accurate were the odds?</h2>
         <p class="intro">If the odds are well judged, teams given a 70% chance should win about 70% of the time.</p>
@@ -760,7 +998,7 @@
 
   function gameHTML(g) {
     const extra = [...g.notes, g.international && g.venue ? g.venue : ''].filter(Boolean);
-    return `<article class="game ${g.league}" title="Game ID ${esc(g.id)}">
+    return `<article class="game ${g.league}" data-key="${g.league}-${esc(g.id)}" title="Game ID ${esc(g.id)}">
       <div class="when">
         <span class="time">${esc(g.uk.time)}</span>
         ${g.uk.hour < 7 ? '<span class="night">overnight</span>' : ''}
@@ -778,6 +1016,7 @@
       <div class="channels">
         ${channelsHTML(g)}
         ${g.usTv.length ? `<span class="ustv">US: ${esc(g.usTv.join(', '))}</span>` : ''}
+        <button type="button" class="gd-open" data-game="${g.league}-${esc(g.id)}">${g.state === 'pre' ? 'Players and odds' : 'Player stats and odds'}</button>
       </div>
     </article>`;
   }
@@ -957,6 +1196,11 @@
     const ref = btn.dataset.tipRef && document.getElementById(btn.dataset.tipRef);
     if (ref) tipEl.innerHTML = ref.innerHTML; else tipEl.textContent = btn.dataset.tip;
     tipEl.classList.toggle('tooltip-list', !!ref);
+    // Inside a pop-up, the description has to live in the pop-up to show above it.
+    const host = btn.closest('dialog[open]') || document.body;
+    if (tipEl.parentNode !== host) host.appendChild(tipEl);
+    const fixed = host !== document.body;
+    tipEl.style.position = fixed ? 'fixed' : '';
     tipEl.hidden = false;
     btn.setAttribute('aria-describedby', 'tooltip');
     const r = btn.getBoundingClientRect();
@@ -965,8 +1209,8 @@
     left = Math.max(8, Math.min(left, document.documentElement.clientWidth - w - 8));
     let top = r.bottom + 8;
     if (top + h > window.innerHeight - 8) top = r.top - h - 8;
-    tipEl.style.left = `${left + window.scrollX}px`;
-    tipEl.style.top = `${top + window.scrollY}px`;
+    tipEl.style.left = `${left + (fixed ? 0 : window.scrollX)}px`;
+    tipEl.style.top = `${top + (fixed ? 0 : window.scrollY)}px`;
   }
   function hideTip() {
     tipEl.hidden = true;
@@ -1052,6 +1296,19 @@
       ${newsBadge(n) ? `<div class="badge-row">${newsBadge(n)}</div>` : ''}
       ${bar ? `<div class="row full"><span class="lbl">Win chance from the odds</span>${bar}</div>` : ''}
       <div class="row"><span class="v">${price(o.away)}</span><span class="lbl">To win</span><span class="v">${price(o.home)}</span></div>`;
+  }
+
+  // Use the summary's bookmaker list to fill gaps in the scoreboard odds.
+  // Returns true if the game had no odds before.
+  function mergeBooks(g, books) {
+    if (!books.length) return false;
+    let gained = false;
+    if (!g.odds) { g.odds = { ...books[0] }; noteGame(g, g.odds); gained = true; }
+    const same = books.find(b => b.provider === g.odds.provider) || books[0];
+    for (const k of ['spreadHome', 'spreadAway', 'spreadHomePrice', 'spreadAwayPrice', 'overPrice', 'underPrice', 'overUnder']) {
+      if (g.odds[k] == null && same[k] != null) g.odds[k] = same[k];
+    }
+    return gained;
   }
 
   // Every other market: spread with prices, totals, opening prices, other bookmakers.
@@ -1573,6 +1830,7 @@
             ${g.notes.length ? `<span class="note">${esc(g.notes.join(', '))}</span>` : ''}
           </div>
           <div class="channels">${channelsHTML(g)}</div>
+          <button type="button" class="gd-open" data-game="${key}">${g.state === 'pre' ? 'Players and odds' : 'Player stats and odds'}</button>
         </header>
 
         <div class="versus">
@@ -1621,18 +1879,9 @@
 
     const sum = await summaryP;
     const books = (sum?.pickcenter || []).map(parseOdds).filter(Boolean);
-    if (!g.odds && books.length) {
-      g.odds = books[0];
-      noteGame(g, g.odds);
+    if (mergeBooks(g, books)) {
       card.querySelector('.odds-slot').innerHTML = oddsMainHTML(g);
       addTips(card.querySelector('.odds-slot'));
-    }
-    // Fill in prices the scoreboard didn't include from the matching bookmaker.
-    if (g.odds && books.length) {
-      const same = books.find(b => b.provider === g.odds.provider) || books[0];
-      for (const k of ['spreadHome', 'spreadAway', 'spreadHomePrice', 'spreadAwayPrice', 'overPrice', 'underPrice', 'overUnder']) {
-        if (g.odds[k] == null && same[k] != null) g.odds[k] = same[k];
-      }
     }
     fill(card, 'more', oddsMoreHTML(g, books));
 
@@ -2014,6 +2263,257 @@
       });
     }
   })();
+
+
+  // ---------- game pop-up: player stats and odds ----------
+  const gameDlg = document.createElement('dialog');
+  gameDlg.className = 'game-dialog';
+  gameDlg.setAttribute('aria-labelledby', 'gd-title');
+  document.body.appendChild(gameDlg);
+  const gd = { game: null, sum: null, err: null, tab: 'stats', side: 'away', timer: null, back: null };
+
+  const titleCase = s => String(s || '').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, c => c.toUpperCase());
+  const headshot = (a, size) => {
+    const src = a?.headshot?.href || (typeof a?.headshot === 'string' ? a.headshot : '');
+    const initials = String(a?.displayName || a?.shortName || '?').split(/\s+/).map(w => w[0]).slice(0, 2).join('');
+    return src
+      ? `<img class="hs" src="${esc(src)}" alt="" width="${size}" height="${size}" loading="lazy">`
+      : `<span class="hs hs-fb" style="width:${size}px;height:${size}px" aria-hidden="true">${esc(initials)}</span>`;
+  };
+
+  // Bring the score and status up to date from the summary.
+  function refreshFromSummary(g, sum) {
+    const comp = sum?.header?.competitions?.[0];
+    if (!comp) return;
+    const st = comp.status?.type;
+    if (st?.state) { g.state = st.state; g.detail = st.shortDetail || st.detail || g.detail; }
+    for (const c of comp.competitors || []) {
+      const t = c.homeAway === 'home' ? g.home : g.away;
+      if (c.score != null && c.score !== '') t.score = c.score;
+      if (c.winner != null) t.winner = !!c.winner;
+    }
+  }
+
+  // Top player in each category for each team (season leaders before the game, game leaders once it starts).
+  function leadersHTML(g, sum) {
+    const byTeam = new Map((sum.leaders || []).map(t => [String(t.team?.id ?? ''), t.leaders || []]));
+    const away = byTeam.get(String(g.away.id)) || [], home = byTeam.get(String(g.home.id)) || [];
+    const cats = [];
+    [...away, ...home].forEach(c => { if (c?.name && !cats.some(x => x.name === c.name)) cats.push(c); });
+    const top = (list, name) => list.find(c => c.name === name)?.leaders?.[0];
+    const person = (l, side) => {
+      if (!l?.athlete) return `<span class="ldr-p ${side} none">–</span>`;
+      const a = l.athlete;
+      const val = l.displayValue || l.mainStat?.value || l.summary || '';
+      return `<span class="ldr-p ${side}">${headshot(a, 40)}
+        <span class="ldr-txt"><span class="ldr-name">${esc(a.shortName || a.displayName)}${a.position?.abbreviation ? ` <span class="pp">${esc(a.position.abbreviation)}</span>` : ''}</span>
+        <span class="ldr-val">${esc(val)}</span></span></span>`;
+    };
+    const rows = cats.map(c => {
+      const al = top(away, c.name), hl = top(home, c.name);
+      if (!al && !hl) return '';
+      return `<div class="ldr">${person(al, 'away')}<span class="ldr-cat">${esc(c.displayName || c.shortDisplayName || titleCase(c.name))}</span>${person(hl, 'home')}</div>`;
+    }).join('');
+    if (!rows) return '';
+    return `<h3 class="gd-sub">${g.state === 'pre' ? 'Season leaders' : 'Game leaders'}</h3><div class="ldrs">${rows}</div>`;
+  }
+
+  // Team totals side by side, when ESPN lists them.
+  function teamStatsCompareHTML(g, sum) {
+    const byTeam = new Map((sum.boxscore?.teams || []).map(t => [String(t.team?.id ?? ''), t.statistics || []]));
+    const a = byTeam.get(String(g.away.id)) || [], h = byTeam.get(String(g.home.id)) || [];
+    if (!a.length || !h.length) return '';
+    const rows = a.map(st => {
+      const other = h.find(x => x.name === st.name);
+      if (!other || st.displayValue == null || !(st.label || st.name)) return '';
+      return `<div class="row"><span class="v">${esc(st.displayValue)}</span><span class="lbl">${esc(st.label || titleCase(st.name))}</span><span class="v">${esc(other.displayValue)}</span></div>`;
+    }).filter(Boolean);
+    if (!rows.length) return '';
+    return `<h3 class="gd-sub">Team stats${g.state === 'pre' ? ' <span class="count">season</span>' : ''}</h3><div class="compare flush">${rows.join('')}</div>`;
+  }
+
+  // Full box score for one team, with a switch between the two teams.
+  function boxScoreHTML(g, sum) {
+    const players = sum.boxscore?.players || [];
+    const hasStats = tp => (tp?.statistics || []).some(grp => (grp.athletes || []).some(a => (a.stats || []).length));
+    const pick = side => players.find(tp => String(tp.team?.id) === String(g[side].id));
+    if (!hasStats(pick('away')) && !hasStats(pick('home'))) return '';
+    const side = gd.side;
+    const tp = pick(side);
+    const toggle = `<div class="seg gd-side" role="group" aria-label="Team">
+      <button type="button" data-gd-side="away" aria-pressed="${side === 'away'}">${esc(g.away.short)}</button>
+      <button type="button" data-gd-side="home" aria-pressed="${side === 'home'}">${esc(g.home.short)}</button>
+    </div>`;
+    const groups = (tp?.statistics || []).map(grp => {
+      const labels = grp.labels || grp.keys || [];
+      const played = (grp.athletes || []).filter(a => (a.stats || []).length && !a.didNotPlay);
+      const dnp = (grp.athletes || []).filter(a => a.didNotPlay || !(a.stats || []).length);
+      if (!played.length) return '';
+      const desc = grp.descriptions || [];
+      const ptsIdx = labels.findIndex(l => /^(pts|points)$/i.test(l));
+      let benchStarted = false;
+      const body = played.map(a => {
+        const bench = g.league === 'nba' && a.starter === false && !benchStarted && played.some(x => x.starter);
+        if (bench) benchStarted = true;
+        const at = a.athlete || {};
+        return `<tr${bench ? ' class="bench"' : ''}>
+          <th scope="row" class="tcell"><span class="bx-name">${esc(at.shortName || at.displayName || 'Player')}</span>${at.position?.abbreviation ? ` <span class="pp">${esc(at.position.abbreviation)}</span>` : ''}</th>
+          ${a.stats.map((v, i) => `<td${i === ptsIdx ? ' class="key"' : ''}>${esc(v)}</td>`).join('')}
+        </tr>`;
+      }).join('');
+      const totals = (grp.totals || []).length ? `<tfoot><tr><th scope="row" class="tcell">Team</th>${grp.totals.map(v => `<td>${esc(v)}</td>`).join('')}</tr></tfoot>` : '';
+      const out = dnp.length && g.league === 'nba'
+        ? `<p class="hint left">Didn’t play: ${dnp.map(a => `${esc(a.athlete?.shortName || a.athlete?.displayName || '')}${a.reason ? ` (${esc(String(a.reason).toLowerCase())})` : ''}`).join(', ')}</p>` : '';
+      return `${(tp.statistics.length > 1) ? `<h4 class="bx-head">${esc(grp.text || titleCase(grp.name) || 'Players')}</h4>` : ''}
+        <div class="table-wrap slim"><table class="box">
+          <thead><tr><th scope="col" class="tcell">Player</th>${labels.map((l, i) => `<th scope="col">${desc[i] ? `<abbr title="${esc(desc[i])}">${esc(l)}</abbr>` : esc(l)}</th>`).join('')}</tr></thead>
+          <tbody>${body}</tbody>${totals}
+        </table></div>${out}`;
+    }).join('');
+    return `<div class="gd-boxhead"><h3 class="gd-sub">Box score</h3>${toggle}</div>
+      ${groups || `<p class="muted">No player stats for ${esc(g[side].short)} yet.</p>`}`;
+  }
+
+  function injuriesListHTML(g, sum) {
+    const inj = parseInjuries(sum);
+    const a = inj[String(g.away.id)] || [], h = inj[String(g.home.id)] || [];
+    if (!a.length && !h.length) return '';
+    const list = (t, l) => (l.length
+      ? `<ul class="players">${l.slice(0, 10).map(i => `<li><span>${esc(i.name)}${i.pos ? ` <span class="pp">${esc(i.pos)}</span>` : ''}</span><span class="ps">${esc(i.status)}</span></li>`).join('')}</ul>`
+      : `<p class="muted small">${esc(t.short)}: none listed.</p>`);
+    return `<h3 class="gd-sub">Injury report</h3><div class="pgrid">${list(g.away, a)}${list(g.home, h)}</div>`;
+  }
+
+  function teamsRowHTML(g) {
+    return `<div class="gd-teams"><span>${logoHTML(g.away, 20)}${esc(g.away.abbr || g.away.short)}</span><span>${esc(g.home.abbr || g.home.short)}${logoHTML(g.home, 20)}</span></div>`;
+  }
+
+  function statsPanelHTML(g, sum) {
+    const parts = [leadersHTML(g, sum), teamStatsCompareHTML(g, sum), boxScoreHTML(g, sum), injuriesListHTML(g, sum)].filter(Boolean);
+    if (!parts.length) {
+      return `<div class="notice empty"><p>ESPN hasn’t published player stats for this game yet.</p>
+        <p>Season leaders and the injury report usually appear a few days before the game.</p></div>`;
+    }
+    return parts.join('');
+  }
+
+  function oddsPanelHTML(g, sum) {
+    const books = (sum?.pickcenter || []).map(parseOdds).filter(Boolean);
+    mergeBooks(g, books);
+    if (!g.odds) return `<div class="notice empty"><p>Odds not out yet for this game.</p><p>They’ll show here as soon as bookmakers release them.</p></div>`;
+    const proj = side => toNum(sum?.predictor?.[`${side}Team`]?.gameProjection);
+    const pa = proj('away'), ph = proj('home');
+    let result = '';
+    const r = hist[`${g.league}-${g.id}`];
+    const gr = r && grade(r);
+    if (gr && gr.favWon != null) {
+      const fav = gr.fav === 'h' ? g.home : g.away;
+      result = `<p class="gd-result ${gr.favWon ? 'hit' : 'miss'}">${gr.favWon ? 'Favourite won' : 'Upset'}: ${esc(fav.short)} were favourites${gr.prob != null ? ` at ${Math.round(gr.prob * 100)}%` : ''}.</p>`;
+    }
+    return `${result}
+      <div class="compare flush" data-sect="main">${oddsMainHTML(g)}</div>
+      ${pa != null && ph != null ? `<div class="compare flush" data-sect="est"><div class="row"><span class="v">${Math.round(pa)}%</span><span class="lbl">Win chance, ESPN</span><span class="v">${Math.round(ph)}%</span></div></div>` : ''}
+      <div class="compare flush" data-sect="more">${oddsMoreHTML(g, books)}</div>
+      <p class="gamble">Odds are US bookmaker lines from ESPN, for information only. If you bet, you must be 18+.
+        For free support, visit <a href="https://www.begambleaware.org" rel="noopener">BeGambleAware.org</a>.</p>`;
+  }
+
+  function renderGameDialog() {
+    const g = gd.game;
+    if (!g) return;
+    const live = g.state !== 'pre';
+    const score = t => (live && t.score != null ? `<span class="big-score">${esc(t.score)}</span>` : '');
+    let panel;
+    if (!gd.sum && !gd.err) panel = `<div class="notice slim"><span class="spinner" aria-hidden="true"></span>Loading players and odds…</div>`;
+    else if (!gd.sum) panel = `<div class="notice error"><p><strong>Couldn't load this game.</strong> Check your connection, then try again.</p><button class="btn" type="button" data-gd-retry>Try again</button></div>`;
+    else panel = gd.tab === 'stats' ? statsPanelHTML(g, gd.sum) : oddsPanelHTML(g, gd.sum);
+
+    gameDlg.className = `game-dialog ${g.league}`;
+    gameDlg.innerHTML = `<div class="gd-inner">
+      <div class="gd-bar">
+        <span class="league-tag ${g.league}">${LEAGUES[g.league].label}</span>
+        <span class="gd-when">${live ? statusHTML(g) : `${esc(dayHeading(g.uk.ymd))}, ${esc(g.uk.time)}`}</span>
+        <button type="button" class="gd-close" aria-label="Close">&times;</button>
+      </div>
+      <header class="gd-head">
+        <h2 id="gd-title" class="sr">${esc(g.away.name)} at ${esc(g.home.name)}</h2>
+        <div class="versus">
+          <div class="side">${logoHTML(g.away, 44)}<span class="sname">${teamLink(g.league, g.away.id, esc(g.away.name))}</span>${score(g.away)}${!live && g.away.record ? `<span class="rec">${esc(g.away.record)}</span>` : ''}</div>
+          <span class="at">at</span>
+          <div class="side">${logoHTML(g.home, 44)}<span class="sname">${teamLink(g.league, g.home.id, esc(g.home.name))}</span>${score(g.home)}${!live && g.home.record ? `<span class="rec">${esc(g.home.record)}</span>` : ''}</div>
+        </div>
+        <div class="channels">${channelsHTML(g)}</div>
+      </header>
+      <div class="gd-tabs-row">
+        <div class="seg gd-tabs" role="group" aria-label="Show">
+          <button type="button" data-gd-tab="stats" aria-pressed="${gd.tab === 'stats'}">Player stats</button>
+          <button type="button" data-gd-tab="odds" aria-pressed="${gd.tab === 'odds'}">Odds</button>
+        </div>
+      </div>
+      <div class="gd-body">${gd.sum ? teamsRowHTML(g) : ''}${panel}</div>
+    </div>`;
+    addTips(gameDlg);
+  }
+
+  async function loadGameDialog(fresh) {
+    const g = gd.game;
+    if (!g) return;
+    const url = `${SITE}/${LEAGUES[g.league].path}/summary?event=${g.id}`;
+    if (fresh) cache.delete(url);
+    try { gd.sum = await getJSON(url); gd.err = null; }
+    catch (err) { if (!gd.sum) gd.err = err; }
+    if (gd.game !== g || !gameDlg.open) return;
+    if (gd.sum) refreshFromSummary(g, gd.sum);
+    renderGameDialog();
+    clearTimeout(gd.timer);
+    if (g.state === 'in') gd.timer = setTimeout(() => loadGameDialog(true), LIVE_REFRESH_MS);
+  }
+
+  function openGame(key, from) {
+    const g = gameIndex.get(key);
+    if (!g) return;
+    hideTip();
+    Object.assign(gd, { game: g, sum: null, err: null, tab: 'stats', side: 'away', back: from || document.activeElement });
+    renderGameDialog();
+    if (!gameDlg.open) {
+      if (typeof gameDlg.showModal === 'function') gameDlg.showModal(); else gameDlg.setAttribute('open', '');
+    }
+    gameDlg.scrollTop = 0;
+    document.body.classList.add('gd-locked');
+    gameDlg.querySelector('.gd-close')?.focus();
+    loadGameDialog();
+  }
+  function closeGame() {
+    if (typeof gameDlg.close === 'function') gameDlg.close(); else { gameDlg.removeAttribute('open'); onGameClosed(); }
+  }
+  function onGameClosed() {
+    clearTimeout(gd.timer);
+    hideTip();
+    document.body.classList.remove('gd-locked');
+    const back = gd.back;
+    gd.game = null; gd.sum = null; gd.back = null;
+    if (back && document.contains(back)) back.focus?.();
+  }
+  gameDlg.addEventListener('close', onGameClosed);
+  gameDlg.addEventListener('scroll', () => { if (!tipEl.hidden && !tipEl.matches(':hover')) hideTip(); }, { passive: true });
+  gameDlg.addEventListener('click', e => {
+    if (e.target === gameDlg) { closeGame(); return; }                 // tapped the dimmed background
+    if (e.target.closest('.gd-close')) { closeGame(); return; }
+    if (e.target.closest('a.tlink')) { gd.back = null; closeGame(); return; }   // going to the team page
+    if (e.target.closest('[data-gd-retry]')) { gd.err = null; renderGameDialog(); loadGameDialog(true); return; }
+    const tab = e.target.closest('[data-gd-tab]');
+    if (tab) { gd.tab = tab.dataset.gdTab; hideTip(); renderGameDialog(); gameDlg.querySelector(`[data-gd-tab="${gd.tab}"]`)?.focus(); return; }
+    const side = e.target.closest('[data-gd-side]');
+    if (side) { gd.side = side.dataset.gdSide; hideTip(); renderGameDialog(); gameDlg.querySelector(`[data-gd-side="${gd.side}"]`)?.focus(); }
+  });
+
+  // Open from the button on any game, or by tapping a schedule row.
+  document.addEventListener('click', e => {
+    const b = e.target.closest?.('.gd-open');
+    if (b) { openGame(b.dataset.game, b); return; }
+    const row = e.target.closest?.('#schedule .game');
+    if (row && !e.target.closest('a, button, .tip, input, label')) openGame(row.dataset.key, row.querySelector('.gd-open'));
+  });
 
   // ---------- team page: historical odds for one team ----------
   const teamView = document.createElement('section');

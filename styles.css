@@ -728,3 +728,139 @@ body.team-open { overflow: hidden; }
   .gamble, .foot { font-size: 0.72rem; }
 }
 
+
+/* ---------- odds record: week by week and team by team ---------- */
+.weekly, .teams-rate { margin-bottom: 2rem; }
+.wchart { margin-bottom: 0.75rem; }
+.wchart .wb { fill: var(--ink); opacity: 0.85; }
+.wchart .wb.cur { opacity: 0.45; }
+.wchart .wx { stroke: var(--focus); stroke-width: 3; stroke-linecap: round; }
+.tchart circle.we { fill: var(--panel); stroke: var(--ink); stroke-width: 2; }
+.legend .lg.wb { background: var(--ink); border-radius: 2px; }
+.legend .lg.wx { background: var(--focus); height: 0.2rem; border-radius: 1px; }
+.legend .lg.we { background: var(--panel); border: 2px solid var(--ink); }
+
+.rtable td, .rtable th { font-size: 0.88rem; vertical-align: top; }
+.rtable td small, .rtable th small { display: block; color: var(--ink-soft); font-size: 0.72rem; font-weight: 500; margin-top: 0.1rem; }
+.rtable tbody .tcell { display: table-cell; font-weight: 600; }
+.rtable tbody tr.cur { background: color-mix(in srgb, var(--focus) 10%, transparent); }
+.rtable .wk { white-space: nowrap; }
+.rtable small.up { color: var(--win); }
+.rtable small.down { color: var(--loss); }
+.rtable .ok { color: var(--win); font-weight: 700; }
+.rtable .no { color: var(--loss); font-weight: 700; }
+/* Keep the first column in view while the table scrolls sideways */
+.rtable .tcell { position: sticky; left: 0; background: var(--panel); z-index: 1; }
+.rtable thead .tcell { z-index: 2; }
+.rtable tbody tr.cur .tcell { background: linear-gradient(color-mix(in srgb, var(--focus) 10%, transparent), color-mix(in srgb, var(--focus) 10%, transparent)), var(--panel); }
+.rtable thead th { white-space: normal; vertical-align: bottom; line-height: 1.2; }
+.tc-in { display: flex; align-items: center; gap: 0.5rem; }
+.tc-in img, .tc-in .logo-fallback { width: 22px; height: 22px; object-fit: contain; flex: none; }
+.tc-in .league-tag { font-size: 0.8rem; }
+.stable .tcell .abbr { display: none; }
+.sort { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; white-space: nowrap; }
+.sort:hover { color: var(--ink); }
+.sort.on { color: var(--ink); }
+th[aria-sort="descending"] .sort::after { content: ' ▼'; font-size: 0.7em; }
+th[aria-sort="ascending"] .sort::after { content: ' ▲'; font-size: 0.7em; }
+.more-row { margin: 0.6rem 0 0; display: flex; }
+.more-row .btn-small { margin-left: 0; }
+
+/* ---------- game pop-up ---------- */
+.gd-open {
+  flex: none; margin-top: 0.15rem;
+  border: 1px solid var(--rule); background: var(--panel); color: var(--ink);
+  border-radius: 999px; padding: 0.3rem 0.8rem; font-size: 0.82rem; font-weight: 600; width: fit-content;
+}
+.gd-open:hover { border-color: var(--ink-soft); }
+.match-top .gd-open { grid-column: 1 / -1; }
+#schedule .game { cursor: pointer; }
+#schedule .game:hover { background: color-mix(in srgb, var(--paper) 45%, transparent); }
+body.gd-locked { overflow: hidden; }
+
+.game-dialog {
+  border: 0; padding: 0; width: min(46rem, calc(100vw - 2rem)); max-height: min(90vh, 56rem);
+  border-radius: 1rem; background: var(--paper); color: var(--ink); overflow-y: auto; overscroll-behavior: contain;
+  border-top: 5px solid var(--nfl);
+}
+.game-dialog.nba { border-top-color: var(--nba); }
+.game-dialog::backdrop { background: rgba(10, 14, 25, 0.6); }
+.game-dialog[open] { animation: gd-in 0.18s ease-out; }
+@keyframes gd-in { from { opacity: 0; } to { opacity: 1; } }
+.gd-bar {
+  position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 0.75rem;
+  background: var(--panel); border-bottom: 1px solid var(--rule); padding: 0.55rem 0.6rem 0.55rem 1.1rem;
+}
+.gd-when { font-size: 0.88rem; color: var(--ink-soft); font-weight: 600; min-width: 0; }
+.gd-close { margin-left: auto; border: 0; background: none; font-size: 1.7rem; line-height: 1; padding: 0.15rem 0.55rem; color: var(--ink-soft); border-radius: 0.4rem; }
+.gd-close:hover { color: var(--ink); }
+.gd-head { background: var(--panel); padding-bottom: 0.9rem; border-bottom: 1px solid var(--rule); }
+.gd-head .versus { padding-top: 1rem; }
+.gd-head .rec { color: var(--ink-soft); font-size: 0.82rem; }
+.gd-head .channels { justify-content: center; padding: 0.6rem 1.1rem 0; }
+.gd-tabs-row { display: flex; justify-content: center; padding: 0.9rem 1rem 0.2rem; }
+.gd-body { padding: 0.5rem 1.1rem 1.5rem; }
+.gd-teams {
+  display: flex; justify-content: space-between; align-items: center; gap: 1rem;
+  font: 700 1rem/1 var(--display); letter-spacing: 0.02em; color: var(--ink-soft); padding: 0.5rem 0 0.2rem;
+}
+.gd-teams span { display: inline-flex; align-items: center; gap: 0.4rem; }
+.gd-teams .logo-fallback { display: none; }
+.gd-teams img, .gd-teams .logo-fallback { width: 20px; height: 20px; object-fit: contain; }
+.gd-sub { display: flex; align-items: baseline; gap: 0.5rem; font: 700 1.25rem/1.1 var(--display); margin: 1.2rem 0 0.5rem; }
+.gd-sub .count { font: 500 0.82rem/1 var(--body); color: var(--ink-soft); }
+.compare.flush { padding: 0; }
+.gd-body .compare.flush + .compare.flush .row:first-child { border-top: 1px solid var(--rule); }
+.gd-result { margin: 0.4rem 0 0.6rem; font-weight: 700; font-size: 0.9rem; padding-left: 0.6rem; border-left: 4px solid var(--win); }
+.gd-result.miss { border-left-color: var(--loss); }
+.gd-body .gamble { font-size: 0.75rem; margin-top: 1rem; }
+
+.ldrs { background: var(--panel); border: 1px solid var(--rule); border-radius: 0.75rem; padding: 0 0.8rem; }
+.ldr {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(5.5rem, auto) minmax(0, 1fr);
+  align-items: center; gap: 0.6rem; padding: 0.6rem 0; border-top: 1px solid var(--rule);
+}
+.ldr:first-child { border-top: 0; }
+.ldr-cat { text-align: center; color: var(--ink-soft); font-size: 0.78rem; line-height: 1.2; }
+.ldr-p { display: flex; align-items: center; gap: 0.55rem; min-width: 0; }
+.ldr-p.home { flex-direction: row-reverse; text-align: right; }
+.ldr-p.none { color: var(--ink-soft); justify-content: center; }
+.ldr-txt { min-width: 0; }
+.ldr-name { display: block; font-weight: 600; font-size: 0.88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ldr-val { display: block; font: 700 1.1rem/1.15 var(--display); font-variant-numeric: tabular-nums; }
+.hs { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; background: var(--paper); flex: none; }
+.hs-fb { display: inline-grid; place-items: center; font: 700 0.8rem/1 var(--display); color: var(--ink-soft); border: 1px solid var(--rule); }
+
+.gd-boxhead { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin: 1.2rem 0 0.5rem; }
+.gd-boxhead .gd-sub { margin: 0; }
+.gd-side button { padding: 0.3rem 0.8rem; font-size: 0.85rem; }
+.bx-head { margin: 0.9rem 0 0.35rem; font: 700 1rem/1.1 var(--display); color: var(--ink-soft); }
+.box th, .box td { font-size: 0.8rem; }
+.box tbody .tcell, .box tfoot .tcell { display: table-cell; position: sticky; left: 0; background: var(--panel); z-index: 1; font-weight: 600; max-width: 9.5rem; overflow: hidden; text-overflow: ellipsis; }
+.box thead .tcell { position: sticky; left: 0; background: var(--panel); z-index: 2; }
+.box td.key { font-weight: 700; }
+.box tr.bench { border-top: 2px solid var(--ink-soft); }
+.box tfoot tr { border-top: 1px solid var(--ink-soft); font-weight: 600; }
+.gd-body .pgrid .players li { font-size: 0.82rem; }
+
+@media (max-width: 760px) {
+  .game-dialog {
+    width: 100%; max-width: 100%; height: 100%; max-height: 100%; margin: 0; inset: 0;
+    border-radius: 0; border-top: 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .gd-bar { padding-top: calc(env(safe-area-inset-top, 0px) + 0.55rem); border-top: 4px solid var(--nfl); }
+  .game-dialog.nba .gd-bar { border-top-color: var(--nba); }
+  .gd-body { padding: 0.4rem 0.75rem 1.5rem; }
+  .ldr { grid-template-columns: minmax(0, 1fr) minmax(4rem, auto) minmax(0, 1fr); gap: 0.4rem; }
+  .hs { width: 32px; height: 32px; }
+  .ldr-name { font-size: 0.78rem; white-space: normal; line-height: 1.2; }
+  .ldr-val { font-size: 0.95rem; }
+  .ldr-cat { font-size: 0.7rem; }
+  .rtable td, .rtable th { font-size: 0.8rem; padding: 0.45rem 0.4rem; }
+}
+@media (max-width: 480px) {
+  .stable .tcell .full { display: none; }
+  .stable .tcell .abbr { display: inline; }
+}
+@media (prefers-reduced-motion: reduce) { .game-dialog[open] { animation: none; } }
